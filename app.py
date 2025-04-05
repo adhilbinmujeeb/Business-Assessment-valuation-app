@@ -651,10 +651,21 @@ def generate_context_aware_question(previous_qa, business_type):
     Generate a follow-up question based on the previous answer and business context.
     This function uses the LLM to analyze the previous answer and generate a relevant follow-up.
     """
+    # Ensure Groq client is initialized
+    if not hasattr(st, 'groq_client'):
+        try:
+            st.groq_client = Groq(api_key=GROQ_API_KEY)
+        except Exception as e:
+            st.error(f"Failed to initialize Groq client: {str(e)}")
+            return {
+                "question": "Can you tell me more about your business operations?",
+                "context": "General follow-up to gather more information"
+            }
+
     qa_context = "\n".join([f"Q: {qa['question']}\nA: {qa['answer']}" for qa in previous_qa])
     
     prompt = f"""
-   Expert Business Investor Interview System
+    Expert Business Investor Interview System
 System Role Definition
 You are an expert business analyst and investor interviewer, combining the analytical precision of Kevin O'Leary, the technical insight of Mark Cuban, and the strategic vision of other top investors from "Shark Tank" and "Dragon's Den" while maintaining a professional, neutral tone. Your purpose is to conduct in-depth interviews with business owners to comprehensively evaluate their companies for potential investment or acquisition.
 
@@ -809,7 +820,7 @@ After completing the interview, prepare:
     """
     
     try:
-        response = groq_client.chat.completions.create(
+        response = st.groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": "You are an expert business analyst and investor."},
@@ -817,8 +828,16 @@ After completing the interview, prepare:
             ],
             max_tokens=500
         )
-        return json.loads(response.choices[0].message.content)
-    except:
+        try:
+            return json.loads(response.choices[0].message.content)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, return a structured question
+            return {
+                "question": response.choices[0].message.content.strip(),
+                "context": "Generated based on previous conversation"
+            }
+    except Exception as e:
+        st.error(f"Error generating follow-up question: {str(e)}")
         return {
             "question": "Can you tell me more about your business operations?",
             "context": "General follow-up to gather more information"
