@@ -18,8 +18,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "gsk_GM4yWDpCCrgnLcudlF6UWGdyb3FY925xux
 
 # Set page configuration
 st.set_page_config(
-    page_title="Business Insights Hub",
-    page_icon="💼",
+    page_title="Business Assessment Tool",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -102,7 +102,6 @@ for attempt in range(3):
         db = client['business_rag']
         business_collection = db['business_attributes']
         question_collection = db['questions']
-        listings_collection = db['business_listings']
         st.write("Connected to MongoDB")
         break
     except pymongo.errors.ConnectionError as e:
@@ -122,61 +121,56 @@ def safe_float(value, default=0):
     except (ValueError, TypeError):
         return default
 
-@st.cache_data(ttl=3600)
-def get_business(business_name):
-    return business_collection.find_one({"business_name": business_name})
-
-@st.cache_data(ttl=3600)
-def get_all_businesses(limit=2072):
-    return list(business_collection.find().limit(limit))
-
-def match_question(query_embedding, questions):
-    best_match = None
-    highest_similarity = -1
-    for q in questions:
-        similarity = 1 - cosine(query_embedding, q['embedding'])
-        if similarity > highest_similarity:
-            highest_similarity = similarity
-            best_match = q
-    return best_match
-
-def groq_qna(query, context=None):
+def get_questions_by_category(category):
+    """
+    Get questions from MongoDB for a specific category
+    """
     try:
-        context_str = f"Context: {context}" if context else "No specific context provided."
-        response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": "You are an expert business analyst. Provide detailed, accurate, and actionable responses."},
-                {"role": "user", "content": f"{context_str}\n\nQuery: {query}"}
-            ],
-            max_tokens=1000
-        )
-        return response.choices[0].message.content
-    except RateLimitError:
-        st.error("Rate limit exceeded. Please try again later.")
-        return "Rate limit exceeded."
-    except APIError as e:
-        st.error(f"Groq API error: {e}")
-        return "Failed to get response from AI."
+        questions = list(question_collection.find({"category": category}))
+        return questions
     except Exception as e:
-        st.error(f"Unexpected error: {e}")
-        return "An unexpected error occurred."
+        st.error(f"Error fetching questions: {str(e)}")
+        return []
 
-# Get list of business names
-business_names = [b['business_name'] for b in get_all_businesses()]
+def get_next_question(previous_qa, business_type):
+    """
+    Get the next question based on previous answers and business type
+    """
+    try:
+        # First try to get a relevant question from MongoDB
+        if len(previous_qa) == 0:
+            # For first question, get from Core Business Analysis Questions
+            questions = get_questions_by_category("Core Business Analysis Questions")
+            if questions:
+                question = questions[0]
+                return {
+                    "question": question["question"],
+                    "category": question["category"],
+                    "subcategory": question.get("subcategory", "")
+                }
+        
+        # For follow-up questions, use context-aware generation
+        next_question = generate_context_aware_question(previous_qa, business_type)
+        return next_question
+        
+    except Exception as e:
+        st.error(f"Error getting next question: {str(e)}")
+        return {
+            "question": "Can you tell me more about your business operations?",
+            "category": "General",
+            "subcategory": "Business Operations"
+        }
 
 # Sidebar Navigation
 with st.sidebar:
     st.markdown('<div class="sidebar-header">', unsafe_allow_html=True)
-    st.title("💼 Business Insights Hub")
+    st.title("📊 Business Assessment")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("### Navigation")
     page = st.radio("", [
-        "🔍 Smart Q&A",
         "💰 Company Valuation",
-        "📊 Business Assessment",
-        "🌐 Marketplace"
+        "📊 Business Assessment"
     ])
 
     st.markdown("---")
@@ -186,65 +180,14 @@ with st.sidebar:
 if 'valuation_data' not in st.session_state:
     st.session_state.valuation_data = {}
 if 'assessment_responses' not in st.session_state:
-    st.session_state.assessment_responses = {}
+    st.session_state.assessment_responses = []
 if 'current_question_idx' not in st.session_state:
     st.session_state.current_question_idx = 0
 if 'valuation_step' not in st.session_state:
     st.session_state.valuation_step = 0
-if 'sample_question' not in st.session_state:
-    st.session_state.sample_question = None
 
-# Pre-populate query from sample question if set
-if st.session_state.sample_question:
-    sample_query = st.session_state.sample_question
-    st.session_state.sample_question = None  # Reset sample question
-else:
-    sample_query = ""
-
-# 1. Smart Q&A
-if "Smart Q&A" in page:
-    st.markdown("# 🔍 Smart Business Intelligence")
-    st.markdown("Get expert answers to your business questions powered by AI.")
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        query = st.text_input("Ask a question about business strategy, valuation, market trends, etc.",
-                              placeholder="E.g., How does this business make money?", value=sample_query)
-    with col2:
-        business_name = st.selectbox("Select Business Context (Optional)", ["None"] + business_names)
-
-    if query:
-        submit_button = st.button("Get Insights", use_container_width=True)
-        if submit_button:
-            if not query.strip():
-                st.warning("Please enter a question.")
-            else:
-                with st.spinner("Analyzing your question..."):
-                    if business_name != "None":
-                        business = get_business(business_name)
-                        response = groq_qna(query, str(business))
-                    else:
-                        response = groq_qna(query)
-
-                    st.markdown("<div class='card'>", unsafe_allow_html=True)
-                    st.markdown("### 💡 Expert Analysis")
-                    st.markdown(response)
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-    with st.expander("Sample Questions"):
-        sample_questions = [
-            "What are typical SaaS business valuation multiples?",
-            "How can I improve my business's customer retention?",
-            "What are common cash flow challenges for startups?",
-            "How do I determine the right pricing strategy for my products?"
-        ]
-        for q in sample_questions:
-            if st.button(q, key=f"sample_{q}"):
-                st.session_state.sample_question = q
-                st.rerun()
-
-# 2. Company Valuation Estimator
-elif "Company Valuation" in page:
+# Company Valuation Section
+if "Company Valuation" in page:
     st.markdown("# 💰 Company Valuation Estimator")
     st.markdown("Estimate your company's value using multiple industry-standard valuation methods.")
 
@@ -397,7 +340,7 @@ elif "Company Valuation" in page:
             st.session_state.valuation_data = {}
             st.rerun()
 
-# 3. Interactive Business Assessment
+# Business Assessment Section
 elif "Business Assessment" in page:
     st.markdown("# 📊 Interactive Business Assessment")
     st.markdown("Get personalized insights through an adaptive business evaluation.")
@@ -426,10 +369,9 @@ elif "Business Assessment" in page:
             if business_type:
                 st.session_state.business_type = business_type
                 st.session_state.assessment_started = True
-                st.session_state.current_question = {
-                    "question": "How long has your business been operating?",
-                    "category": "Business History"
-                }
+                # Get first question from MongoDB
+                first_question = get_next_question([], business_type)
+                st.session_state.current_question = first_question
                 st.rerun()
             else:
                 st.warning("Please select or specify a business type")
@@ -454,25 +396,17 @@ elif "Business Assessment" in page:
                     st.session_state.assessment_responses.append({
                         "question": st.session_state.current_question["question"],
                         "answer": response,
-                        "category": st.session_state.current_question.get("category", "General")
+                        "category": st.session_state.current_question.get("category", "General"),
+                        "subcategory": st.session_state.current_question.get("subcategory", "")
                     })
                     
-                    # Update business context
-                    st.session_state.business_context.update({
-                        st.session_state.current_question["question"]: response
-                    })
-                    
-                    # Generate next question based on context
-                    next_question = generate_context_aware_question(
+                    # Get next question
+                    next_question = get_next_question(
                         st.session_state.assessment_responses,
                         st.session_state.business_type
                     )
                     
-                    st.session_state.current_question = {
-                        "question": next_question["question"],
-                        "category": "Follow-up"
-                    }
-                    
+                    st.session_state.current_question = next_question
                     st.rerun()
                 else:
                     st.warning("Please provide an answer before proceeding")
@@ -485,7 +419,7 @@ elif "Business Assessment" in page:
             
             # Format assessment data for analysis
             assessment_data = "\n".join([
-                f"Q: {qa['question']}\nA: {qa['answer']}"
+                f"Q: {qa['question']}\nA: {qa['answer']}\nCategory: {qa['category']}\nSubcategory: {qa.get('subcategory', '')}"
                 for qa in st.session_state.assessment_responses
             ])
             
@@ -525,131 +459,16 @@ elif "Business Assessment" in page:
             
             st.markdown("</div>", unsafe_allow_html=True)
 
-# 4. Showcase Listings for Investors
-elif "Marketplace" in page:
-    st.markdown("# 🌐 Business Marketplace")
-    st.markdown("Connect businesses with investors.")
-
-    tabs = st.tabs(["🏢 List Your Business", "💸 Investor Dashboard"])
-
-    with tabs[0]:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("## Create Your Business Listing")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            listing_name = st.text_input("Business Name", placeholder="E.g., Acme Technologies")
-            listing_industry = st.selectbox("Industry", [
-                "Technology", "E-commerce", "Healthcare", "Finance",
-                "Real Estate", "Manufacturing", "Retail", "Services",
-                "Food & Beverage", "Education", "Other"
-            ])
-            listing_revenue = st.number_input("Annual Revenue (USD)", min_value=0, step=10000, format="%i")
-        with col2:
-            listing_location = st.text_input("Location", placeholder="City, Country")
-            founding_year = st.number_input("Year Founded", min_value=1900, max_value=datetime.now().year, value=datetime.now().year)
-            team_size = st.number_input("Team Size", min_value=1, value=5)
-
-        listing_description = st.text_area("Business Description", height=150,
-                                          placeholder="Describe your business, value proposition, market opportunity, and why investors should be interested.")
-
-        col3, col4 = st.columns(2)
-        with col3:
-            investment_sought = st.number_input("Investment Amount Sought (USD)", min_value=0, step=50000, format="%i")
-            equity_offered = st.slider("Equity Offered (%)", min_value=0.0, max_value=100.0, value=15.0, step=0.5)
-        with col4:
-            listing_contact = st.text_input("Contact Email", placeholder="your.email@example.com")
-            website = st.text_input("Website URL", placeholder="https://yourbusiness.com")
-
-        if st.button("Submit Listing", use_container_width=True):
-            listing = {
-                "business_name": listing_name,
-                "industry": listing_industry,
-                "revenue": listing_revenue,
-                "description": listing_description,
-                "contact": listing_contact,
-                "location": listing_location,
-                "founded": founding_year,
-                "team_size": team_size,
-                "investment_sought": investment_sought,
-                "equity_offered": equity_offered,
-                "website": website,
-                "listed_date": datetime.now().isoformat()
-            }
-            listings_collection.insert_one(listing)
-            st.success("✅ Business listed successfully!")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with tabs[1]:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("## Investor Dashboard")
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            industry_filter = st.multiselect("Filter by Industry", [
-                "Technology", "E-commerce", "Healthcare", "Finance",
-                "Real Estate", "Manufacturing", "Retail", "Services",
-                "Food & Beverage", "Education", "Other"
-            ])
-        with col2:
-            min_revenue = st.number_input("Minimum Revenue (USD)", min_value=0, step=50000, value=0)
-        with col3:
-            max_investment = st.number_input("Maximum Investment (USD)", min_value=0, step=100000, value=1000000)
-
-        query = {}
-        if industry_filter:
-            query["industry"] = {"$in": industry_filter}
-        if min_revenue > 0:
-            query["revenue"] = {"$gte": min_revenue}
-        if max_investment > 0:
-            query["investment_sought"] = {"$lte": max_investment}
-
-        listings = list(listings_collection.find(query))
-
-        if listings:
-            for listing in listings:
-                st.markdown(f"""
-                <div style='padding: 1.2rem; background-color: white; border-radius: 8px; border: 1px solid #E2E8F0; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
-                    <div style='display: flex; justify-content: space-between; align-items: center;'>
-                        <h3 style='margin: 0; color: #1E3A8A;'>{listing.get('business_name', 'Unnamed Business')}</h3>
-                        <span style='font-size: 0.8rem; background-color: #EFF6FF; padding: 0.2rem 0.5rem; border-radius: 4px; color: #1E3A8A;'>{listing.get('industry', 'Uncategorized')}</span>
-                    </div>
-                    <div style='display: flex; gap: 1rem; margin-top: 0.8rem; font-size: 0.85rem; color: #64748B;'>
-                        <div><span style='font-weight: 500;'>📍 Location:</span> {listing.get('location', 'Not specified')}</div>
-                        <div><span style='font-weight: 500;'>🏢 Founded:</span> {listing.get('founded', 'Not specified')}</div>
-                        <div><span style='font-weight: 500;'>👥 Team:</span> {listing.get('team_size', 'Not specified')}</div>
-                    </div>
-                    <p style='margin-top: 0.8rem; margin-bottom: 0.8rem; font-size: 0.95rem;'>{listing.get('description', 'No description provided.')}</p>
-                    <div style='display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;'>
-                        <div>
-                            <div style='font-weight: 500; color: #1E3A8A;'>Seeking ${listing.get('investment_sought', 0):,}</div>
-                            <div style='font-size: 0.85rem; color: #64748B;'>For {listing.get('equity_offered', 0)}% equity</div>
-                        </div>
-                        <div>
-                            <div style='font-weight: 500; color: #1E3A8A;'>Revenue: ${listing.get('revenue', 0):,}</div>
-                            <div style='font-size: 0.85rem; color: #64748B;'>Annual</div>
-                        </div>
-                        <a href='mailto:{listing.get('contact', '')}' style='text-decoration: none; background-color: #1E3A8A; color: white; padding: 0.5rem 1rem; border-radius: 4px; font-size: 0.9rem;'>Contact</a>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info("No businesses match your filter criteria.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
 # Footer
 st.markdown("""
 <div style='background-color: #F8FAFC; padding: 1rem; border-top: 1px solid #E2E8F0; text-align: center; font-size: 0.8rem; color: #64748B; margin-top: 2rem;'>
-    Business Insights Hub © 2025 | Powered by Groq AI
+    Business Assessment Tool © 2025 | Powered by Groq AI
 </div>
 """, unsafe_allow_html=True)
 
 def generate_context_aware_question(previous_qa, business_type):
     """
     Generate a follow-up question based on the previous answer and business context.
-    This function uses the LLM to analyze the previous answer and generate a relevant follow-up.
     """
     # Ensure Groq client is initialized
     if not hasattr(st, 'groq_client'):
@@ -659,7 +478,8 @@ def generate_context_aware_question(previous_qa, business_type):
             st.error(f"Failed to initialize Groq client: {str(e)}")
             return {
                 "question": "Can you tell me more about your business operations?",
-                "context": "General follow-up to gather more information"
+                "category": "General",
+                "subcategory": "Business Operations"
             }
 
     qa_context = "\n".join([f"Q: {qa['question']}\nA: {qa['answer']}" for qa in previous_qa])
@@ -834,31 +654,13 @@ After completing the interview, prepare:
             # If JSON parsing fails, return a structured question
             return {
                 "question": response.choices[0].message.content.strip(),
-                "context": "Generated based on previous conversation"
+                "category": "Core Business Analysis Questions",
+                "subcategory": "Business Fundamentals"
             }
     except Exception as e:
         st.error(f"Error generating follow-up question: {str(e)}")
         return {
             "question": "Can you tell me more about your business operations?",
-            "context": "General follow-up to gather more information"
+            "category": "Core Business Analysis Questions",
+            "subcategory": "Business Fundamentals"
         }
-
-def get_business_category_questions(business_type):
-    """
-    Get category-specific questions from MongoDB based on business type
-    """
-    try:
-        # Search for questions in the database that match the business type
-        category_questions = list(question_collection.find({
-            "business_type": {"$regex": business_type, "$options": "i"}
-        }))
-        
-        if not category_questions:
-            # If no specific questions found, get general small business questions
-            category_questions = list(question_collection.find({
-                "category": "small_business"
-            }))
-        
-        return category_questions
-    except:
-        return []
