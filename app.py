@@ -134,7 +134,7 @@ def get_questions_by_category(category):
 
 def get_next_question(previous_qa, business_type):
     """
-    Get the next question based on business type and previous answers, prioritizing real investor questions from MongoDB
+    Get the next question based on business type and previous answers, using real investor questions from MongoDB
     """
     try:
         if len(previous_qa) == 0:
@@ -144,22 +144,18 @@ def get_next_question(previous_qa, business_type):
                     {"business_type": business_type},
                     {"business_type": "General"},
                     {"category": "Initial Assessment"}
-                ],
-                "is_initial_question": True
-            }).sort("relevance_score", -1).limit(1))
+                ]
+            }).limit(1))
 
             if initial_questions:
                 question = initial_questions[0]
                 return {
                     "question": question["question"],
                     "category": question["category"],
-                    "subcategory": question.get("subcategory", ""),
-                    "source": question.get("source", "Investor Database"),
-                    "investor": question.get("investor", "Unknown")
+                    "subcategory": question.get("subcategory", "")
                 }
 
         # For subsequent questions, try to find relevant follow-up questions
-        last_answer = previous_qa[-1]["answer"] if previous_qa else ""
         last_category = previous_qa[-1].get("category", "General") if previous_qa else "General"
         
         # Find follow-up questions based on business type and category
@@ -170,7 +166,7 @@ def get_next_question(previous_qa, business_type):
             ],
             "category": last_category,
             "question": {"$nin": [qa["question"] for qa in previous_qa]}  # Avoid repeating questions
-        }).sort("relevance_score", -1).limit(3))
+        }).limit(3))
 
         if follow_up_questions:
             # Select the most relevant question
@@ -178,9 +174,7 @@ def get_next_question(previous_qa, business_type):
             return {
                 "question": question["question"],
                 "category": question["category"],
-                "subcategory": question.get("subcategory", ""),
-                "source": question.get("source", "Investor Database"),
-                "investor": question.get("investor", "Unknown")
+                "subcategory": question.get("subcategory", "")
             }
         
         # If no suitable questions found in MongoDB, generate one using AI
@@ -421,7 +415,8 @@ elif "Business Assessment" in page:
             st.markdown(f"### Question {total_questions}")
             st.markdown(f"**{st.session_state.current_question['question']}**")
             
-            response = st.text_area("Your Answer", height=100, key="current_answer")
+            # Use a unique key for each question to avoid state issues
+            response = st.text_area("Your Answer", height=100, key=f"answer_{total_questions}")
             
             if st.button("Submit Answer", use_container_width=True):
                 if response.strip():
@@ -439,8 +434,9 @@ elif "Business Assessment" in page:
                         st.session_state.business_type
                     )
                     
+                    # Update the current question
                     st.session_state.current_question = next_question
-                    st.rerun()
+                    st.experimental_rerun()
                 else:
                     st.warning("Please provide an answer before proceeding")
             
