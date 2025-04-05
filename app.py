@@ -558,11 +558,11 @@ elif "Business Assessment" in page:
             
             # Generate next question based on the conversation history
            with st.spinner("Analyzing your response and preparing next question..."):
-               # Format conversation history for the AI
-    conversation_context = "\n\n".join([
+               conversation_context = "\n\n".join([
         f"Q: {exchange['question']}\nA: {exchange['answer']}"
         for exchange in st.session_state.conversation_history
     ])
+               # Format conversation history for the AI
     
     # Determine business category based on user input
     if st.session_state.question_count == 1:
