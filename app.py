@@ -131,30 +131,22 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
 
     try:
         # Create a context for Gemini to generate personalized questions
-        context = f"""
-        You are an experienced investor from Shark Tank/Dragon's Den. You're evaluating a business with these details:
-        - Business Name: {business_info['name']}
-        - Industry: {business_info['industry']}
-        - Stage: {business_info['stage']}
-        {f"- Seeking Funding: ${business_info['funding_needed']:,.2f}" if business_info['seeking_funding'] else "- Not seeking funding"}
+        context = """
+        Generate 3-5 specific business evaluation questions for a {industry} company at the {stage} stage.
+        Focus on key business metrics, market opportunity, and growth potential.
         
-        Previous Q&A:
-        {json.dumps(previous_responses, indent=2)}
-        
-        Based on this information, generate 3-5 personalized, conversational questions that:
-        1. Feel natural and engaging, like a real investor conversation
-        2. Are specific to their industry and business stage
-        3. Build upon previous answers
-        4. Help uncover critical business insights
-        5. Use a friendly but professional tone
-        
-        Format each question as a JSON object with:
-        - question: The actual question text
-        - category: The business aspect it addresses
-        - follow_up: A suggested follow-up question if the answer is unsatisfactory
-        
-        Return a JSON array of these questions.
-        """
+        Format: Return only a JSON array of question objects with the following structure:
+        [
+            {
+                "question": "The question text",
+                "category": "Question category",
+                "follow_up": "Follow-up question"
+            }
+        ]
+        """.format(
+            industry=business_info['industry'],
+            stage=business_info['stage']
+        )
         
         response = model.generate_content(context)
         if not response or not response.text:
@@ -162,7 +154,14 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
             return default_questions
 
         try:
-            questions = json.loads(response.text)
+            # Clean the response text to ensure it's valid JSON
+            response_text = response.text.strip()
+            if not response_text.startswith('['):
+                response_text = response_text[response_text.find('['):]
+            if not response_text.endswith(']'):
+                response_text = response_text[:response_text.rfind(']')+1]
+            
+            questions = json.loads(response_text)
             if not isinstance(questions, list) or len(questions) == 0:
                 logger.warning("Invalid questions format from Gemini API")
                 return default_questions
@@ -178,13 +177,13 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
                     })
 
             if len(valid_questions) < 3:
-                logger.warning("Not enough valid questions from Gemini API")
+                logger.warning(f"Not enough valid questions ({len(valid_questions)}), using defaults")
                 return default_questions
 
             return valid_questions
 
-        except json.JSONDecodeError:
-            logger.error("Failed to parse generated questions")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse generated questions: {e}")
             return default_questions
 
     except Exception as e:
@@ -243,7 +242,6 @@ def main():
         st.session_state.business_info = None
         st.session_state.current_questions = []
         st.session_state.answered_questions = set()
-        st.session_state.question_index = 0
     
     # Business Basics Stage
     if st.session_state.stage == 'basics':
@@ -256,7 +254,7 @@ def main():
                     st.session_state.business_info,
                     st.session_state.qa_history
                 )
-                st.rerun()
+                st.experimental_rerun()
             else:
                 st.error("Please fill in all required fields.")
     
@@ -271,14 +269,24 @@ def main():
                 st.session_state.qa_history
             )
         
-        # Display questions immediately
-        if st.session_state.current_questions:
-            st.write("Let's start with some key questions about your business:")
-            
-            for question in st.session_state.current_questions:
-                if question['question'] not in st.session_state.answered_questions:
-                    with st.expander(f"Q: {question['question']}", expanded=True):
-                        response = st.text_area("Your Answer:", key=f"q_{hash(question['question'])}")
+        # Display current progress
+        eval_result = evaluate_responses(st.session_state.qa_history)
+        total_questions = max(5, len(st.session_state.qa_history) + eval_result['questions_needed'])
+        progress = min(100, max(0, (len(st.session_state.qa_history) / total_questions) * 100))
+        st.progress(int(progress))
+        
+        # Display questions
+        st.write("Let's start with some key questions about your business:")
+        
+        for idx, question in enumerate(st.session_state.current_questions):
+            if question['question'] not in st.session_state.answered_questions:
+                with st.expander(f"Q: {question['question']}", expanded=True):
+                    response = st.text_area(
+                        "Your Answer:",
+                        key=f"q_{idx}_{hash(question['question'])}"
+                    )
+                    
+                    if st.button("Submit Answer", key=f"submit_{idx}"):
                         if response:
                             st.session_state.qa_history.append({
                                 "question": question['question'],
@@ -289,8 +297,16 @@ def main():
                             st.session_state.answered_questions.add(question['question'])
                             
                             # Check if answer needs follow-up
-                            if 'follow_up' in question and st.checkbox("Would you like to elaborate further?", key=f"fu_{hash(question['question'])}"):
-                                follow_up_response = st.text_area("Follow-up:", key=f"f_{hash(question['question'])}")
+                            follow_up = st.checkbox(
+                                "Would you like to provide more detail?",
+                                key=f"fu_{idx}_{hash(question['question'])}"
+                            )
+                            
+                            if follow_up:
+                                follow_up_response = st.text_area(
+                                    "Additional Details:",
+                                    key=f"f_{idx}_{hash(question['question'])}"
+                                )
                                 if follow_up_response:
                                     st.session_state.qa_history.append({
                                         "question": question['follow_up'],
@@ -298,40 +314,33 @@ def main():
                                         "category": question['category'],
                                         "timestamp": datetime.now().isoformat()
                                     })
+                            st.experimental_rerun()
         
-        # Evaluate responses and show progress
-        eval_result = evaluate_responses(st.session_state.qa_history)
+        # Show progress information
+        st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
+        st.write(f"Confidence Level: {eval_result['confidence_level']}%")
         
-        # Progress bar calculation
-        total_questions = len(st.session_state.qa_history) + eval_result['questions_needed']
-        if total_questions > 0:
-            progress = min(100, max(0, (len(st.session_state.qa_history) / total_questions) * 100))
-            st.progress(int(progress))  # Convert to integer to avoid float issues
-        else:
-            st.progress(0)  # Default to 0 if no questions yet
-        
+        # Navigation buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Continue Assessment", type="primary"):
+                # Generate new questions for the next round
+                st.session_state.current_questions = get_relevant_questions(
+                    st.session_state.business_info,
+                    st.session_state.qa_history
+                )
+                st.experimental_rerun()
+        with col2:
+            if st.button("Start Over", type="secondary"):
+                st.session_state.clear()
+                st.experimental_rerun()
+                
+        # Check if we have enough information for a report
         if eval_result['enough_info']:
             st.success("We have gathered sufficient information to generate a detailed report!")
             if st.button("Generate Report", type="primary"):
                 st.session_state.stage = 'report'
-                st.rerun()
-        else:
-            st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
-            st.write(f"Confidence Level: {eval_result['confidence_level']}%")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Continue Assessment", type="primary"):
-                    # Generate new questions for the next round
-                    st.session_state.current_questions = get_relevant_questions(
-                        st.session_state.business_info,
-                        st.session_state.qa_history
-                    )
-                    st.rerun()
-            with col2:
-                if st.button("Start Over", type="secondary"):
-                    st.session_state.clear()
-                    st.rerun()
+                st.experimental_rerun()
     
     # Report Stage
     elif st.session_state.stage == 'report':
@@ -351,7 +360,7 @@ def main():
         
         if st.button("Start New Assessment", type="primary"):
             st.session_state.clear()
-            st.rerun()
+            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
