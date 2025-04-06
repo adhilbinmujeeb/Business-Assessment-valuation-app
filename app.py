@@ -5,15 +5,16 @@ import pandas as pd
 import numpy as np
 from scipy.spatial.distance import cosine
 from datetime import datetime
-from groq import Groq, APIError, RateLimitError
+import google.generativeai as genai
 import os
 from dotenv import load_dotenv
 import time
+import json
 
 # Load environment variables
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Set page configuration
 st.set_page_config(
@@ -111,8 +112,9 @@ else:
     st.error("Failed to connect to MongoDB after retries. Please check your connection details.")
     st.stop()
 
-# Groq API Setup
-groq_client = Groq(api_key=GROQ_API_KEY)
+# Gemini API Setup
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-pro')
 
 # Helper Functions
 def safe_float(value, default=0):
@@ -129,186 +131,265 @@ def get_business(business_name):
 def get_all_businesses(limit=2072):
     return list(business_collection.find().limit(limit))
 
-
-
-def groq_qna(query, context=None):
+def gemini_qna(query, context=None, assess_confidence=False):
     try:
         context_str = f"Context: {context}" if context else "No specific context provided."
-        system_prompt = """
-Expert Business Investor Interview System
-System Role Definition
-You are an expert business analyst and investor interviewer, combining the analytical precision of Kevin O'Leary, the technical insight of Mark Cuban, and the strategic vision of other top investors from "Shark Tank" and "Dragon's Den" while maintaining a professional, neutral tone. Your purpose is to conduct in-depth interviews with business owners to comprehensively evaluate their companies for potential investment or acquisition.
-
-Interview Context & Objectives
-You have access to a database of approximately 1021 unique questions from investor shows like Shark Tank and Dragon's Den. Your goal is to leverage these questions strategically while adapting them to each specific business. The interview should gather all information necessary to:
-    1. Build a complete business profile 
-    2. Assess viability and growth potential 
-    3. Identify strengths, weaknesses, and opportunities 
-    4. Determine appropriate valuation methods and ranges 
-    5. Generate an investor-ready business summary 
-
-Adaptive Interview Methodology
-Phase 1: Initial Discovery (3-5 questions)
-Begin with general questions to identify fundamental business parameters:
-- "Tell me about your business and what problem you're solving."
-- "How long have you been operating and what's your current stage?"
-- "What industry are you in and who are your target customers?"
-- "What's your revenue model and current traction?"
-
-Phase 2: Business Model Deep Dive (5-7 questions)
-Tailor questions based on the business model identified in Phase 1:
-For Digital/SaaS businesses: Focus on metrics like MRR/ARR, churn rate, CAC, LTV, and scalability
-- "What's your monthly recurring revenue and growth rate?"
-- "What's your customer acquisition cost compared to lifetime value?"
-- "What's your churn rate and retention strategy?"
-For Physical Product businesses: Focus on production, supply chain, margins, and distribution
-- "What are your production costs and gross margins?"
-- "How do you manage your supply chain and inventory?"
-- "What are your distribution channels and retail strategy?"
-For Service businesses: Focus on scalability, capacity utilization, pricing models
-- "How do you scale your service delivery beyond your personal time?"
-- "What's your hourly/project rate structure and utilization rate?"
-- "How do you maintain quality as you expand your team?"
-
-Phase 3: Market & Competition Analysis (4-6 questions)
-Adapt questions based on market maturity and competitive landscape:
-- "What's your total addressable market size and how did you calculate it?"
-- "Who are your top 3 competitors and how do you differentiate?"
-- "What barriers to entry exist in your market?"
-- "What market trends are impacting your growth potential?"
-
-Phase 4: Financial Performance (5-8 questions)
-Tailor financial questions based on business stage:
-For Pre-revenue/Early stage:
-- "What's your burn rate and runway?"
-- "What are your financial projections for the next 24 months?"
-- "What assumptions underlie your revenue forecasts?"
-For Revenue-generating businesses:
-- "What has your year-over-year revenue growth been?"
-- "Break down your cost structure between fixed and variable costs."
-- "What's your path to profitability and timeline?"
-- "What are your gross and net margins?"
-For Profitable businesses:
-- "What's your EBITDA and how has it evolved over time?"
-- "What's your cash conversion cycle?"
-- "How do you reinvest profits back into the business?"
-
-Phase 5: Team & Operations (3-5 questions)
-- "Tell me about your founding team and key executives."
-- "What critical roles are you looking to fill next?"
-- "How is equity distributed among founders and employees?"
-- "What operational challenges are limiting your growth?"
-
-Phase 6: Investment & Growth Strategy (4-6 questions)
-- "How much capital are you raising and at what valuation?"
-- "How will you allocate the investment funds?"
-- "What specific milestones will this funding help you achieve?"
-- "What's your long-term exit strategy?"
-
-Dynamic Adaptation Requirements
-Pattern Recognition Flags
-Throughout the interview, identify patterns that require deeper investigation:
-Red Flags - Require immediate follow-up:
-    • Inconsistent financial numbers 
-    • Unrealistic market size claims 
-    • Vague answers about competition 
-    • Excessive founder salaries relative to revenue 
-    • Unreasonable valuation expectations 
-Opportunity Signals - Areas to explore further:
-    • Unusually high margins for the industry 
-    • Proprietary technology or IP 
-    • Evidence of product-market fit 
-    • Strong team with relevant experience 
-    • Clear customer acquisition strategy with proven ROI 
-Jump Logic Instructions
-    • If a response reveals a critical issue or opportunity, immediately pivot to explore that area more deeply before returning to your sequence 
-    • If you detect inconsistency between answers, flag it and seek clarification 
-    • If the business has unusual characteristics that don't fit standard models, adapt your questioning approach accordingly 
-Response Analysis
-Continuously evaluate:
-    • Answer quality and thoroughness 
-    • Internal consistency across topics 
-    • Information gaps requiring additional questions 
-    • Unique business aspects that warrant customized questions 
-Strategic Database Utilization
-When selecting or formulating questions:
-    1. Start with general questions from your database that match the current business context 
-    2. Adapt database questions to the specific business type, size, and stage 
-    3. Create logical follow-up questions based on previous answers 
-    4. When encountering unique business aspects, formulate new questions inspired by patterns in your database 
-Communication Guidelines
-Interview Flow
-    • Maintain a conversational but purposeful tone 
-    • Ask one question at a time to ensure clarity 
-    • Begin with open-ended questions before narrowing focus 
-    • Acknowledge and build upon previous answers to show active listening 
-    • Use transitional phrases when changing topics: "Now I'd like to understand more about..." 
-Question Formulation
-    • Be direct and specific in your questions 
-    • Avoid leading questions that suggest preferred answers 
-    • Use neutral language that doesn't assume success or failure 
-    • When needed, request quantifiable metrics rather than generalities 
-    • Frame follow-up questions that refer to previous answers: "You mentioned X earlier. How does that relate to...?" 
-Business Valuation Framework
-Apply appropriate valuation methods based on business type and stage:
-    1. For Pre-Revenue Companies: 
-        ◦ Team and IP assessment 
-        ◦ Market opportunity sizing 
-        ◦ Comparable early-stage funding rounds 
-    2. For Early-Stage Revenue Companies: 
-        ◦ Revenue multiples based on growth rate 
-        ◦ Customer acquisition economics assessment 
-        ◦ Comparable transaction analysis 
-    3. For Established Companies: 
-        ◦ P/E ratios 
-        ◦ EV/EBITDA multiples 
-        ◦ Discounted Cash Flow analysis 
-        ◦ Book value and asset-based valuations 
-Analysis & Deliverables
-After completing the interview, prepare:
-    1. Business Profile Summary including: 
-        ◦ Company overview and value proposition 
-        ◦ Market opportunity assessment 
-        ◦ Competitive positioning 
-        ◦ Team evaluation 
-        ◦ Business model analysis 
-    2. Financial Analysis including: 
-        ◦ Revenue and profitability metrics 
-        ◦ Growth trajectory 
-        ◦ Unit economics 
-        ◦ Capital efficiency 
-    3. Valuation Assessment including: 
-        ◦ Methodologies applied 
-        ◦ Comparable company/transaction benchmarks 
-        ◦ Recommended valuation range 
-        ◦ Key value drivers and detractors 
-    4. Investment Considerations including: 
-        ◦ Key strengths and differentiators 
-        ◦ Risk factors and mitigation strategies 
-        ◦ Growth opportunities 
-        ◦ Strategic recommendations
-"""
-        response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"{context_str}\n\nQuery: {query}"}
-            ],
-            max_tokens=8000
-        )
-        return response.choices[0].message.content
-    except RateLimitError:
-        st.error("Rate limit exceeded. Please try again later.")
-        return "Rate limit exceeded."
-    except APIError as e:
-        st.error(f"Groq API error: {e}")
-        return "Failed to get response from AI."
+        
+        if assess_confidence:
+            system_prompt_with_confidence = """
+            Analyze the conversation history and assess:
+            1. How well we understand the business (0-1 confidence score)
+            2. What critical areas still need exploration
+            3. Whether we have enough information for a meaningful assessment
+            
+            Return in JSON format:
+            {
+                "confidence_score": float,
+                "missing_areas": [string],
+                "has_sufficient_info": boolean,
+                "next_question": string
+            }
+            """
+            
+            response = model.generate_content(
+                f"{system_prompt_with_confidence}\n\n{context_str}\n\nAssess current understanding and determine next question: {query}"
+            )
+            
+            return json.loads(response.text)
+            
+        else:
+            system_prompt = """
+            Expert Business Investor Interview System
+            System Role Definition
+            You are an expert business analyst and investor interviewer, combining the analytical precision of Kevin O'Leary, 
+            the technical insight of Mark Cuban, and the strategic vision of top investors from "Shark Tank" and "Dragon's Den"
+            while maintaining a professional, neutral tone.
+            """
+            
+            response = model.generate_content(
+                f"{system_prompt}\n\n{context_str}\n\nQuery: {query}"
+            )
+            return response.text
+            
     except Exception as e:
-        st.error(f"Unexpected error: {e}")
-        return "An unexpected error occurred."
+        st.error(f"Gemini API error: {e}")
+        return None
 
-# Get list of business names
-business_names = [b['business_name'] for b in get_all_businesses()]
+def assess_business_complexity(initial_response):
+    """Analyze initial business description to determine complexity factors"""
+    complexity_prompt = """
+    Analyze the business description and determine its complexity level based on:
+    1. Industry complexity
+    2. Business model complexity
+    3. Operational scale
+    4. Regulatory requirements
+    5. Market dynamics
+    6. Organizational structure
+    
+    Return JSON:
+    {
+        "complexity_score": float (0-1),
+        "recommended_min_questions": int,
+        "recommended_max_questions": int,
+        "key_areas": [string],
+        "justification": string
+    }
+    """
+    
+    result = gemini_qna(
+        query=complexity_prompt,
+        context=initial_response,
+        assess_confidence=True
+    )
+    
+    return result
+
+def get_required_categories(business_type, complexity_score):
+    """Determine which question categories are essential for this business"""
+    base_categories = ["Business Fundamentals", "Financial Performance"]
+    
+    additional_categories = {
+        "high_complexity": [
+            "Risk Assessment",
+            "International Expansion",
+            "Regulatory Compliance",
+            "Crisis Management"
+        ],
+        "medium_complexity": [
+            "Market Position",
+            "Operations",
+            "Team & Leadership"
+        ],
+        "low_complexity": [
+            "Growth & Scaling",
+            "Basic Operations"
+        ]
+    }
+    
+    if complexity_score > 0.7:
+        return base_categories + additional_categories["high_complexity"]
+    elif complexity_score > 0.4:
+        return base_categories + additional_categories["medium_complexity"]
+    else:
+        return base_categories + additional_categories["low_complexity"]
+
+def should_continue_assessment(state):
+    """Determine if assessment should continue based on multiple factors"""
+    # Confidence threshold varies by complexity
+    confidence_threshold = 0.9 if state["complexity_score"] > 0.7 else 0.8
+    
+    # Check coverage of required categories
+    categories_covered = len(set(state["covered_categories"]))
+    required_categories = len(state["required_categories"])
+    category_coverage = categories_covered / required_categories if required_categories > 0 else 1.0
+    
+    # Define stopping criteria
+    criteria = {
+        "confidence_met": state["assessment_confidence"] >= confidence_threshold,
+        "category_coverage": category_coverage >= 0.9,
+        "min_questions_asked": state["question_count"] >= state["min_questions"],
+        "max_questions_not_exceeded": state["question_count"] < state["max_questions"]
+    }
+    
+    # Log assessment progress
+    st.write("Assessment Progress:", criteria)
+    
+    # Continue if we haven't met confidence OR haven't covered categories
+    # But stop if we hit max questions
+    return (
+        (not criteria["confidence_met"] or not criteria["category_coverage"]) and
+        criteria["max_questions_not_exceeded"]
+    )
+
+def reset_assessment():
+    st.session_state.assessment_state = {
+        "question_count": 0,
+        "assessment_confidence": 0.0,
+        "complexity_score": 0.0,
+        "required_categories": [],
+        "covered_categories": [],
+        "min_questions": 5,
+        "max_questions": 30,
+        "responses": {}
+    }
+
+def run_dynamic_assessment():
+    st.markdown("# 📊 Interactive Business Assessment")
+    st.markdown("Get personalized insights through an adaptive business evaluation.")
+    
+    # Initialize assessment state if not exists
+    if "assessment_state" not in st.session_state:
+        reset_assessment()
+    
+    state = st.session_state.assessment_state
+    
+    # Display current assessment stats
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Questions Asked", state["question_count"])
+    with col2:
+        st.metric("Understanding Level", f"{state['assessment_confidence']:.0%}")
+    with col3:
+        remaining = state["max_questions"] - state["question_count"]
+        st.metric("Questions Remaining", f"Up to {remaining}")
+    
+    # First question to understand business
+    if state["question_count"] == 0:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("### Tell me about your business and what problem you're solving.")
+        
+        initial_response = st.text_area("Your Answer", height=100, key="initial_response")
+        
+        if st.button("Submit", use_container_width=True):
+            if initial_response:
+                # Analyze business complexity
+                complexity_analysis = assess_business_complexity(initial_response)
+                if complexity_analysis:
+                    state["complexity_score"] = complexity_analysis["complexity_score"]
+                    state["min_questions"] = complexity_analysis["recommended_min_questions"]
+                    state["max_questions"] = complexity_analysis["recommended_max_questions"]
+                    state["required_categories"] = get_required_categories(
+                        business_type="",  # You can add business type detection here
+                        complexity_score=state["complexity_score"]
+                    )
+                    state["responses"]["initial"] = initial_response
+                    state["question_count"] += 1
+                    st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Continue assessment
+    elif should_continue_assessment(state):
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        
+        # Get next question and confidence assessment
+        conversation_history = "\n".join([
+            f"Q: {q}\nA: {a}" 
+            for q, a in state["responses"].items()
+        ])
+        
+        result = gemini_qna(
+            query="Determine next question based on current understanding",
+            context=conversation_history,
+            assess_confidence=True
+        )
+        
+        if result:
+            # Update confidence score
+            state["assessment_confidence"] = result["confidence_score"]
+            
+            # Display missing areas if any
+            if result["missing_areas"]:
+                st.info("Areas needing exploration: " + ", ".join(result["missing_areas"]))
+            
+            # Display current question
+            st.markdown(f"### Question {state['question_count'] + 1}")
+            st.markdown(f"**{result['next_question']}**")
+            
+            # Get user response
+            response = st.text_area("Your Answer", height=100, key=f"q_{state['question_count']}")
+            
+            if st.button("Submit Answer", use_container_width=True):
+                # Save response
+                state["responses"][result["next_question"]] = response
+                state["question_count"] += 1
+                st.rerun()
+        
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    else:
+        # Assessment complete
+        show_assessment_results(state)
+
+def show_assessment_results(state):
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("## Business Assessment Results")
+    
+    # Generate comprehensive analysis
+    conversation_history = "\n".join([
+        f"Q: {q}\nA: {a}" 
+        for q, a in state["responses"].items()
+    ])
+    
+    analysis_result = gemini_qna(
+        query="Generate comprehensive business assessment",
+        context=conversation_history
+    )
+    
+    if analysis_result:
+        st.markdown(analysis_result)
+    
+    # Option to continue assessment if confidence is still low
+    if state["assessment_confidence"] < 0.8:
+        if st.button("Continue Assessment for More Detailed Analysis"):
+            state["max_questions"] += 5  # Allow more questions
+            st.rerun()
+    
+    # Option to start new assessment
+    if st.button("Start New Assessment", use_container_width=True):
+        reset_assessment()
+        st.rerun()
+    
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # Sidebar Navigation
 with st.sidebar:
@@ -325,28 +406,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f"<div style='text-align: center; padding: 1rem; font-size: 0.8rem; color: #64748B;'>{datetime.now().strftime('%B %d, %Y')}</div>", unsafe_allow_html=True)
 
-# Session State Initialization
-if 'valuation_data' not in st.session_state:
-    st.session_state.valuation_data = {}
-if 'assessment_responses' not in st.session_state:
-    st.session_state.assessment_responses = {}
-if 'current_question_idx' not in st.session_state:
-    st.session_state.current_question_idx = 0
-if 'valuation_step' not in st.session_state:
-    st.session_state.valuation_step = 0
-if 'sample_question' not in st.session_state:
-    st.session_state.sample_question = None
-
-# Pre-populate query from sample question if set
-if st.session_state.sample_question:
-    sample_query = st.session_state.sample_question
-    st.session_state.sample_question = None  # Reset sample question
-else:
-    sample_query = ""
-
-
-# 2. Company Valuation Estimator
+# Main Content
 if "Company Valuation" in page:
+    # Company Valuation section code (unchanged from original)
     st.markdown("# 💰 Company Valuation Estimator")
     st.markdown("Estimate your company's value using multiple industry-standard valuation methods.")
 
@@ -360,6 +422,11 @@ if "Company Valuation" in page:
         "What are your projected cash flows for the next 5 years (comma-separated, in USD)?",
         "What is your company's growth rate (e.g., High, Moderate, Low)?"
     ]
+
+    if 'valuation_step' not in st.session_state:
+        st.session_state.valuation_step = 0
+    if 'valuation_data' not in st.session_state:
+        st.session_state.valuation_data = {}
 
     total_steps = len(valuation_questions)
     current_step = st.session_state.valuation_step
@@ -487,7 +554,7 @@ if "Company Valuation" in page:
 
             Format your response with clear headings and bullet points. Make sure to include a final summary section with a recommended valuation range at the end.
             """
-            valuation_result = groq_qna(valuation_prompt)
+            valuation_result = gemini_qna(valuation_prompt)
 
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("## Valuation Results")
@@ -499,360 +566,12 @@ if "Company Valuation" in page:
             st.session_state.valuation_data = {}
             st.rerun()
 
-# 3. Interactive Business Assessment
 elif "Business Assessment" in page:
-    st.markdown("# 📊 Interactive Business Assessment")
-    st.markdown("Get personalized insights through an adaptive business evaluation.")
-    
-    # Initialize session state variables if they don't exist
-    if 'conversation_history' not in st.session_state:
-        st.session_state.conversation_history = []
-    if 'question_count' not in st.session_state:
-        st.session_state.question_count = 0
-    if 'assessment_completed' not in st.session_state:
-        st.session_state.assessment_completed = False
-    if 'assessment_responses' not in st.session_state:
-        st.session_state.assessment_responses = {}
-    
-    # Maximum number of questions to ask
-    max_questions = 15
-    
-    # Display progress
-    st.progress(min(1.0, st.session_state.question_count / max_questions))
-    
-    # Check if assessment is not completed and under max questions
-    if not st.session_state.assessment_completed and st.session_state.question_count < max_questions:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        
-        # Generate initial question if we're just starting
-        if st.session_state.question_count == 0:
-            initial_question = "Tell me about your business and what problem you're solving."
-            st.session_state.current_question = initial_question
-        
-        # Display current question
-        st.markdown(f"### Question {st.session_state.question_count + 1} of {max_questions}")
-        st.markdown(f"**{st.session_state.current_question}**")
-        
-        # Get user response
-        response = st.text_area("Your Answer", height=100, key=f"q_{st.session_state.question_count}")
-        
-        if st.button("Submit Answer", use_container_width=True):
-            # Save response to session state
-            st.session_state.assessment_responses[st.session_state.current_question] = response
-            
-            # Add to conversation history
-            st.session_state.conversation_history.append({
-                "question": st.session_state.current_question,
-                "answer": response
-            })
-            
-            # Increment question counter
-            st.session_state.question_count += 1
-            
-            # Check if we've reached max questions
-            if st.session_state.question_count >= max_questions:
-                st.session_state.assessment_completed = True
-                st.rerun()
-            
-            # Generate next question based on the conversation history
-            with st.spinner("Analyzing your response and preparing next question..."):
-                # Format conversation history for the AI
-                conversation_context = "\n\n".join([
-                    f"Q: {exchange['question']}\nA: {exchange['answer']}"
-                    for exchange in st.session_state.conversation_history
-                ])
-                
-                # Prompt for the next question
-                next_question_prompt = f"""
-                You are an expert business analyst and investor interviewer. 
-                You've been conducting an assessment with a business owner and need to ask the next most relevant question.
-                
-                Here's the conversation history so far:
-                
-                {conversation_context}
-                
-                Based on these responses, what is the single most important next question to ask?
-                The question should help you better understand a critical aspect of their business that hasn't been fully explored yet.
-                
-                Please provide only the next question, without any additional text or explanation.
-                Expert Business Investor Interview System
-System Role Definition
-You are an expert business analyst and investor interviewer, combining the analytical precision of Kevin O'Leary, the technical insight of Mark Cuban, and the strategic vision of other top investors from "Shark Tank" and "Dragon's Den" while maintaining a professional, neutral tone. Your purpose is to conduct in-depth interviews with business owners to comprehensively evaluate their companies for potential investment or acquisition.
-
-Interview Context & Objectives
-You have access to a database of approximately 1021 unique questions from investor shows like Shark Tank and Dragon's Den. Your goal is to leverage these questions strategically while adapting them to each specific business. The interview should gather all information necessary to:
-    1. Build a complete business profile 
-    2. Assess viability and growth potential 
-    3. Identify strengths, weaknesses, and opportunities 
-    4. Determine appropriate valuation methods and ranges 
-    5. Generate an investor-ready business summary 
-
-Adaptive Interview Methodology
-Phase 1: Initial Discovery (3-5 questions)
-Begin with general questions to identify fundamental business parameters:
-- "Tell me about your business and what problem you're solving."
-- "How long have you been operating and what's your current stage?"
-- "What industry are you in and who are your target customers?"
-- "What's your revenue model and current traction?"
-
-Phase 2: Business Model Deep Dive (5-7 questions)
-Tailor questions based on the business model identified in Phase 1:
-For Digital/SaaS businesses: Focus on metrics like MRR/ARR, churn rate, CAC, LTV, and scalability
-- "What's your monthly recurring revenue and growth rate?"
-- "What's your customer acquisition cost compared to lifetime value?"
-- "What's your churn rate and retention strategy?"
-For Physical Product businesses: Focus on production, supply chain, margins, and distribution
-- "What are your production costs and gross margins?"
-- "How do you manage your supply chain and inventory?"
-- "What are your distribution channels and retail strategy?"
-For Service businesses: Focus on scalability, capacity utilization, pricing models
-- "How do you scale your service delivery beyond your personal time?"
-- "What's your hourly/project rate structure and utilization rate?"
-- "How do you maintain quality as you expand your team?"
-
-Phase 3: Market & Competition Analysis (4-6 questions)
-Adapt questions based on market maturity and competitive landscape:
-- "What's your total addressable market size and how did you calculate it?"
-- "Who are your top 3 competitors and how do you differentiate?"
-- "What barriers to entry exist in your market?"
-- "What market trends are impacting your growth potential?"
-
-Phase 4: Financial Performance (5-8 questions)
-Tailor financial questions based on business stage:
-For Pre-revenue/Early stage:
-- "What's your burn rate and runway?"
-- "What are your financial projections for the next 24 months?"
-- "What assumptions underlie your revenue forecasts?"
-For Revenue-generating businesses:
-- "What has your year-over-year revenue growth been?"
-- "Break down your cost structure between fixed and variable costs."
-- "What's your path to profitability and timeline?"
-- "What are your gross and net margins?"
-For Profitable businesses:
-- "What's your EBITDA and how has it evolved over time?"
-- "What's your cash conversion cycle?"
-- "How do you reinvest profits back into the business?"
-
-Phase 5: Team & Operations (3-5 questions)
-- "Tell me about your founding team and key executives."
-- "What critical roles are you looking to fill next?"
-- "How is equity distributed among founders and employees?"
-- "What operational challenges are limiting your growth?"
-
-Phase 6: Investment & Growth Strategy (4-6 questions)
-- "How much capital are you raising and at what valuation?"
-- "How will you allocate the investment funds?"
-- "What specific milestones will this funding help you achieve?"
-- "What's your long-term exit strategy?"
-
-Dynamic Adaptation Requirements
-Pattern Recognition Flags
-Throughout the interview, identify patterns that require deeper investigation:
-Red Flags - Require immediate follow-up:
-    • Inconsistent financial numbers 
-    • Unrealistic market size claims 
-    • Vague answers about competition 
-    • Excessive founder salaries relative to revenue 
-    • Unreasonable valuation expectations 
-Opportunity Signals - Areas to explore further:
-    • Unusually high margins for the industry 
-    • Proprietary technology or IP 
-    • Evidence of product-market fit 
-    • Strong team with relevant experience 
-    • Clear customer acquisition strategy with proven ROI 
-Jump Logic Instructions
-    • If a response reveals a critical issue or opportunity, immediately pivot to explore that area more deeply before returning to your sequence 
-    • If you detect inconsistency between answers, flag it and seek clarification 
-    • If the business has unusual characteristics that don't fit standard models, adapt your questioning approach accordingly 
-Response Analysis
-Continuously evaluate:
-    • Answer quality and thoroughness 
-    • Internal consistency across topics 
-    • Information gaps requiring additional questions 
-    • Unique business aspects that warrant customized questions 
-Strategic Database Utilization
-When selecting or formulating questions:
-    1. Start with general questions from your database that match the current business context 
-    2. Adapt database questions to the specific business type, size, and stage 
-    3. Create logical follow-up questions based on previous answers 
-    4. When encountering unique business aspects, formulate new questions inspired by patterns in your database 
-Communication Guidelines
-Interview Flow
-    • Maintain a conversational but purposeful tone 
-    • Ask one question at a time to ensure clarity 
-    • Begin with open-ended questions before narrowing focus 
-    • Acknowledge and build upon previous answers to show active listening 
-    • Use transitional phrases when changing topics: "Now I'd like to understand more about..." 
-Question Formulation
-    • Be direct and specific in your questions 
-    • Avoid leading questions that suggest preferred answers 
-    • Use neutral language that doesn't assume success or failure 
-    • When needed, request quantifiable metrics rather than generalities 
-    • Frame follow-up questions that refer to previous answers: "You mentioned X earlier. How does that relate to...?" 
-Business Valuation Framework
-Apply appropriate valuation methods based on business type and stage:
-    1. For Pre-Revenue Companies: 
-        ◦ Team and IP assessment 
-        ◦ Market opportunity sizing 
-        ◦ Comparable early-stage funding rounds 
-    2. For Early-Stage Revenue Companies: 
-        ◦ Revenue multiples based on growth rate 
-        ◦ Customer acquisition economics assessment 
-        ◦ Comparable transaction analysis 
-    3. For Established Companies: 
-        ◦ P/E ratios 
-        ◦ EV/EBITDA multiples 
-        ◦ Discounted Cash Flow analysis 
-        ◦ Book value and asset-based valuations 
-Analysis & Deliverables
-After completing the interview, prepare:
-    1. Business Profile Summary including: 
-        ◦ Company overview and value proposition 
-        ◦ Market opportunity assessment 
-        ◦ Competitive positioning 
-        ◦ Team evaluation 
-        ◦ Business model analysis 
-    2. Financial Analysis including: 
-        ◦ Revenue and profitability metrics 
-        ◦ Growth trajectory 
-        ◦ Unit economics 
-        ◦ Capital efficiency 
-    3. Valuation Assessment including: 
-        ◦ Methodologies applied 
-        ◦ Comparable company/transaction benchmarks 
-        ◦ Recommended valuation range 
-        ◦ Key value drivers and detractors 
-    4. Investment Considerations including: 
-        ◦ Key strengths and differentiators 
-        ◦ Risk factors and mitigation strategies 
-        ◦ Growth opportunities 
-        ◦ Strategic recommendations
-                """
-                
-                # Get next question from AI
-                next_question = groq_qna(next_question_prompt).strip()
-                st.session_state.current_question = next_question
-            
-            st.rerun()
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-    
-    # Show results if assessment is completed
-    elif st.session_state.assessment_completed:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("## Business Assessment Results")
-        
-        # Format conversation history for analysis
-        assessment_data = "\n".join([
-            f"Q: {q}\nA: {a}" 
-            for q, a in st.session_state.assessment_responses.items() if a
-        ])
-        
-        # Comprehensive analysis prompt
-        analysis_prompt = f"""
-        Expert Business Investor Assessment System
-        
-        You are an expert business analyst and investor interviewer, combining the analytical precision of Kevin O'Leary, 
-        the technical insight of Mark Cuban, and the strategic vision of top investors from "Shark Tank" and "Dragon's Den"
-        while maintaining a professional, neutral tone.
-        
-        Based on the following interview with a business owner, provide a comprehensive assessment of their business:
-        
-        {assessment_data}
-        
-        Your analysis should include:
-        
-        1. Business Profile Summary
-           - Company overview and value proposition
-           - Market opportunity assessment
-           - Competitive positioning
-           - Team evaluation
-           - Business model analysis
-        
-        2. SWOT Analysis
-           - Strengths
-           - Weaknesses
-           - Opportunities
-           - Threats
-        
-        3. Financial Assessment
-           - Revenue and profitability evaluation
-           - Growth trajectory
-           - Unit economics (if applicable)
-           - Capital efficiency
-        
-        4. Valuation Considerations
-           - Appropriate valuation methodologies
-           - Key value drivers and detractors
-           - Reasonable valuation range (if enough information is available)
-        
-        5. Strategic Recommendations
-           - Growth opportunities
-           - Risk mitigation strategies
-           - Suggested next steps
-           - Investment considerations
-        
-        6. Overall Rating (1-10)
-           - Provide a numerical rating with justification
-        
-        Format your response with clear headings and bullet points for readability.
-        If there are critical gaps in the information provided, note these as areas requiring further investigation.
-        """
-        
-        # Generate comprehensive business assessment
-        with st.spinner("Generating comprehensive business assessment report..."):
-            analysis_result = groq_qna(analysis_prompt)
-        
-        # Display analysis result
-        st.markdown(analysis_result)
-        
-        # Option to start a new assessment
-        if st.button("Start New Assessment", use_container_width=True):
-            st.session_state.conversation_history = []
-            st.session_state.question_count = 0
-            st.session_state.assessment_completed = False
-            st.session_state.assessment_responses = {}
-            st.rerun()
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-
-
- 
-        if listings:
-            for listing in listings:
-                st.markdown(f"""
-                <div style='padding: 1.2rem; background-color: white; border-radius: 8px; border: 1px solid #E2E8F0; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);'>
-                    <div style='display: flex; justify-content: space-between; align-items: center;'>
-                        <h3 style='margin: 0; color: #1E3A8A;'>{listing.get('business_name', 'Unnamed Business')}</h3>
-                        <span style='font-size: 0.8rem; background-color: #EFF6FF; padding: 0.2rem 0.5rem; border-radius: 4px; color: #1E3A8A;'>{listing.get('industry', 'Uncategorized')}</span>
-                    </div>
-                    <div style='display: flex; gap: 1rem; margin-top: 0.8rem; font-size: 0.85rem; color: #64748B;'>
-                        <div><span style='font-weight: 500;'>📍 Location:</span> {listing.get('location', 'Not specified')}</div>
-                        <div><span style='font-weight: 500;'>🏢 Founded:</span> {listing.get('founded', 'Not specified')}</div>
-                        <div><span style='font-weight: 500;'>👥 Team:</span> {listing.get('team_size', 'Not specified')}</div>
-                    </div>
-                    <p style='margin-top: 0.8rem; margin-bottom: 0.8rem; font-size: 0.95rem;'>{listing.get('description', 'No description provided.')}</p>
-                    <div style='display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;'>
-                        <div>
-                            <div style='font-weight: 500; color: #1E3A8A;'>Seeking ${listing.get('investment_sought', 0):,}</div>
-                            <div style='font-size: 0.85rem; color: #64748B;'>For {listing.get('equity_offered', 0)}% equity</div>
-                        </div>
-                        <div>
-                            <div style='font-weight: 500; color: #1E3A8A;'>Revenue: ${listing.get('revenue', 0):,}</div>
-                            <div style='font-size: 0.85rem; color: #64748B;'>Annual</div>
-                        </div>
-                        <a href='mailto:{listing.get('contact', '')}' style='text-decoration: none; background-color: #1E3A8A; color: white; padding: 0.5rem 1rem; border-radius: 4px; font-size: 0.9rem;'>Contact</a>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info("No businesses match your filter criteria.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+    run_dynamic_assessment()
 
 # Footer
 st.markdown("""
 <div style='background-color: #F8FAFC; padding: 1rem; border-top: 1px solid #E2E8F0; text-align: center; font-size: 0.8rem; color: #64748B; margin-top: 2rem;'>
-    Business Insights Hub © 2025 | Powered by Groq AI |  
+    Business Insights Hub © 2025 | Powered by Gemini AI |  
 </div>
-""", unsafe_allow_html=True)
+""", unsafe_allow_html=True) 
