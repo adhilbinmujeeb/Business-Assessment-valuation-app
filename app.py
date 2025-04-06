@@ -18,7 +18,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-pro-preview-03-25')
+model = genai.GenerativeModel('gemini-pro')
 
 # Set page configuration
 st.set_page_config(
@@ -132,6 +132,52 @@ def get_questions_by_category(category):
     except Exception as e:
         st.error(f"Error fetching questions: {str(e)}")
         return []
+
+def generate_context_aware_question(previous_qa, business_type):
+    """
+    Generate a follow-up question based on the previous answer and business context.
+    """
+    qa_context = "\n".join([f"Q: {qa['question']}\nA: {qa['answer']}" for qa in previous_qa])
+    
+    prompt = f"""
+    You are an expert business analyst and investor. You're analyzing a {business_type} business.
+    Based on the following conversation:
+
+    {qa_context}
+
+    Generate ONE highly relevant follow-up question that:
+    1. Builds upon the previous answer
+    2. Digs deeper into important aspects mentioned
+    3. Helps understand the business better
+    4. Is specific to the {business_type} industry
+    5. Feels natural in the conversation flow
+
+    Format your response as a JSON object with:
+    {{
+        "question": "the follow-up question",
+        "category": "the question category (e.g., Core Business Analysis Questions)",
+        "subcategory": "the question subcategory (e.g., Business Fundamentals)"
+    }}
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        try:
+            return json.loads(response.text)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, return a structured question
+            return {
+                "question": response.text.strip(),
+                "category": "Core Business Analysis Questions",
+                "subcategory": "Business Fundamentals"
+            }
+    except Exception as e:
+        st.error(f"Error generating follow-up question: {str(e)}")
+        return {
+            "question": "Can you tell me more about your business operations?",
+            "category": "Core Business Analysis Questions",
+            "subcategory": "Business Fundamentals"
+        }
 
 def get_next_question(previous_qa, business_type):
     """
@@ -438,7 +484,7 @@ elif "Business Assessment" in page:
                     
                     # Update the current question
                     st.session_state.current_question = next_question
-                    st.experimental_rerun()
+                    st.rerun()
                 else:
                     st.warning("Please provide an answer before proceeding")
 
@@ -455,24 +501,7 @@ elif "Business Assessment" in page:
             ])
 
             analysis_prompt = f"""
-            You are an expert business consultant analyzing a {st.session_state.business_type} business.
-            Based on the following assessment responses:
-
-            {assessment_data}
-
-            Please provide a comprehensive analysis that includes:
-            1. Executive Summary
-            2. Business Model Analysis
-            3. Market Position and Competition
-            4. Financial Health Assessment
-            5. Operational Strengths and Weaknesses
-            6. Growth Opportunities
-            7. Risk Factors
-            8. Strategic Recommendations
-            9. Investment Potential
-
-            Format your response with clear headings and bullet points.
-            Be specific and provide actionable insights based on the business type and responses.
+            
             """
             
             with st.spinner("Generating business assessment report..."):
@@ -497,49 +526,3 @@ st.markdown("""
     Business Assessment Tool © 2025 | Powered by Gemini AI
 </div>
 """, unsafe_allow_html=True)
-
-def generate_context_aware_question(previous_qa, business_type):
-    """
-    Generate a follow-up question based on the previous answer and business context.
-    """
-    qa_context = "\n".join([f"Q: {qa['question']}\nA: {qa['answer']}" for qa in previous_qa])
-    
-    prompt = f"""
-    You are an expert business analyst and investor. You're analyzing a {business_type} business.
-    Based on the following conversation:
-
-    {qa_context}
-
-    Generate ONE highly relevant follow-up question that:
-    1. Builds upon the previous answer
-    2. Digs deeper into important aspects mentioned
-    3. Helps understand the business better
-    4. Is specific to the {business_type} industry
-    5. Feels natural in the conversation flow
-
-    Format your response as a JSON object with:
-    {{
-        "question": "the follow-up question",
-        "category": "the question category (e.g., Core Business Analysis Questions)",
-        "subcategory": "the question subcategory (e.g., Business Fundamentals)"
-    }}
-    """
-    
-    try:
-        response = model.generate_content(prompt)
-        try:
-            return json.loads(response.text)
-        except json.JSONDecodeError:
-            # If JSON parsing fails, return a structured question
-            return {
-                "question": response.text.strip(),
-                "category": "Core Business Analysis Questions",
-                "subcategory": "Business Fundamentals"
-            }
-    except Exception as e:
-        st.error(f"Error generating follow-up question: {str(e)}")
-        return {
-            "question": "Can you tell me more about your business operations?",
-            "category": "Core Business Analysis Questions",
-            "subcategory": "Business Fundamentals"
-        }
