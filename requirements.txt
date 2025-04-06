@@ -7,3 +7,4 @@ matplotlib
 requests
 groq
 python-dotenv
+google.generativeai as genai
