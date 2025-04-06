@@ -140,13 +140,59 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
         response = model.generate_content(context)
         try:
             questions = json.loads(response.text)
+            # Ensure we have at least 3 questions
+            if len(questions) < 3:
+                # Generate more questions if needed
+                additional_context = f"""
+                We need more questions. Please generate {3 - len(questions)} more questions about:
+                - Business model and revenue streams
+                - Market opportunity and competition
+                - Growth strategy and scalability
+                """
+                additional_response = model.generate_content(additional_context)
+                additional_questions = json.loads(additional_response.text)
+                questions.extend(additional_questions)
             return questions
         except json.JSONDecodeError:
             logger.error("Failed to parse generated questions")
-            return []
+            # Return default questions if parsing fails
+            return [
+                {
+                    "question": f"Tell me about your business model. How do you make money?",
+                    "category": "Business Model",
+                    "follow_up": "Could you elaborate on your main revenue streams?"
+                },
+                {
+                    "question": f"What problem does your business solve in the {business_info['industry']} industry?",
+                    "category": "Market Problem",
+                    "follow_up": "How is your solution different from existing alternatives?"
+                },
+                {
+                    "question": f"Who are your target customers and how do you reach them?",
+                    "category": "Customer Acquisition",
+                    "follow_up": "What's your customer acquisition cost and lifetime value?"
+                }
+            ]
     except Exception as e:
         logger.error(f"Failed to get relevant questions: {e}")
-        return []
+        # Return default questions if generation fails
+        return [
+            {
+                "question": f"Tell me about your business model. How do you make money?",
+                "category": "Business Model",
+                "follow_up": "Could you elaborate on your main revenue streams?"
+            },
+            {
+                "question": f"What problem does your business solve in the {business_info['industry']} industry?",
+                "category": "Market Problem",
+                "follow_up": "How is your solution different from existing alternatives?"
+            },
+            {
+                "question": f"Who are your target customers and how do you reach them?",
+                "category": "Customer Acquisition",
+                "follow_up": "What's your customer acquisition cost and lifetime value?"
+            }
+        ]
 
 def generate_report(business_info: Dict, qa_history: List[Dict]) -> str:
     """Generates a comprehensive investment report."""
@@ -200,6 +246,7 @@ def main():
         st.session_state.business_info = None
         st.session_state.current_questions = []
         st.session_state.answered_questions = set()
+        st.session_state.question_index = 0
     
     # Business Basics Stage
     if st.session_state.stage == 'basics':
@@ -207,6 +254,7 @@ def main():
         if st.button("Start Assessment", type="primary"):
             if validate_business_info(st.session_state.business_info):
                 st.session_state.stage = 'questioning'
+                # Generate initial questions
                 st.session_state.current_questions = get_relevant_questions(
                     st.session_state.business_info,
                     st.session_state.qa_history
@@ -218,6 +266,13 @@ def main():
     # Questioning Stage
     elif st.session_state.stage == 'questioning':
         st.write(f"Evaluating {st.session_state.business_info['name']}")
+        
+        # Always ensure we have questions to display
+        if not st.session_state.current_questions:
+            st.session_state.current_questions = get_relevant_questions(
+                st.session_state.business_info,
+                st.session_state.qa_history
+            )
         
         eval_result = evaluate_responses(st.session_state.qa_history)
         
@@ -235,17 +290,10 @@ def main():
             st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
             st.write(f"Confidence Level: {eval_result['confidence_level']}%")
             
-            # Get new questions if needed
-            if not st.session_state.current_questions:
-                st.session_state.current_questions = get_relevant_questions(
-                    st.session_state.business_info,
-                    st.session_state.qa_history
-                )
-            
             # Display current questions
             for question in st.session_state.current_questions:
                 if question['question'] not in st.session_state.answered_questions:
-                    with st.expander(f"Q: {question['question']}"):
+                    with st.expander(f"Q: {question['question']}", expanded=True):
                         response = st.text_area("Your Answer:", key=f"q_{hash(question['question'])}")
                         if response:
                             st.session_state.qa_history.append({
@@ -257,7 +305,7 @@ def main():
                             st.session_state.answered_questions.add(question['question'])
                             
                             # Check if answer needs follow-up
-                            if 'follow_up' in question and st.checkbox("Would you like to elaborate further?"):
+                            if 'follow_up' in question and st.checkbox("Would you like to elaborate further?", key=f"fu_{hash(question['question'])}"):
                                 follow_up_response = st.text_area("Follow-up:", key=f"f_{hash(question['question'])}")
                                 if follow_up_response:
                                     st.session_state.qa_history.append({
@@ -270,7 +318,11 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Continue Assessment", type="primary"):
-                    st.session_state.current_questions = []
+                    # Generate new questions for the next round
+                    st.session_state.current_questions = get_relevant_questions(
+                        st.session_state.business_info,
+                        st.session_state.qa_history
+                    )
                     st.rerun()
             with col2:
                 if st.button("Start Over", type="secondary"):
