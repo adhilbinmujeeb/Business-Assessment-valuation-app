@@ -479,7 +479,8 @@ def main():
          with st.spinner("Loading question bank..."):
              # Retrieve stored collection instance
              q_collection = st.session_state.get('question_collection_instance')
-             if q_collection:
+             # CORRECTED LINE: Explicitly check for None
+             if q_collection is not None:
                   st.session_state.all_questions = load_all_questions(q_collection)
                   if st.session_state.all_questions:
                       st.session_state.all_questions_loaded = True
@@ -491,7 +492,7 @@ def main():
                       st.stop()
              else:
                   # Should not happen if connection_status is 'connected', but defensive check
-                  st.error("Internal Error: Question collection instance not found.")
+                  st.error("Internal Error: Question collection instance not found in session state.")
                   st.session_state.connection_status = "failed"
                   st.stop()
 
