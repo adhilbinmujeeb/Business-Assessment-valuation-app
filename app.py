@@ -184,7 +184,7 @@ def main():
         if st.button("Start Assessment", type="primary"):
             if validate_business_info(st.session_state.business_info):
                 st.session_state.stage = 'questioning'
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("Please fill in all required fields.")
     
@@ -203,7 +203,7 @@ def main():
             st.success("We have gathered sufficient information to generate a detailed report!")
             if st.button("Generate Report", type="primary"):
                 st.session_state.stage = 'report'
-                st.experimental_rerun()
+                st.rerun()
         else:
             st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
             st.write(f"Confidence Level: {eval_result['confidence_level']}%")
@@ -226,11 +226,11 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Continue Assessment", type="primary"):
-                    st.experimental_rerun()
+                    st.rerun()
             with col2:
                 if st.button("Start Over", type="secondary"):
                     st.session_state.clear()
-                    st.experimental_rerun()
+                    st.rerun()
     
     # Report Stage
     elif st.session_state.stage == 'report':
@@ -250,7 +250,7 @@ def main():
         
         if st.button("Start New Assessment", type="primary"):
             st.session_state.clear()
-            st.experimental_rerun()
+            st.rerun()
 
 if __name__ == "__main__":
     main()
