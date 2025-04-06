@@ -274,26 +274,10 @@ def main():
                 st.session_state.qa_history
             )
         
-        eval_result = evaluate_responses(st.session_state.qa_history)
-        
-        # Progress bar calculation
-        total_questions = len(st.session_state.qa_history) + eval_result['questions_needed']
-        if total_questions > 0:
-            progress = min(100, max(0, (len(st.session_state.qa_history) / total_questions) * 100))
-            st.progress(int(progress))  # Convert to integer to avoid float issues
-        else:
-            st.progress(0)  # Default to 0 if no questions yet
-        
-        if eval_result['enough_info']:
-            st.success("We have gathered sufficient information to generate a detailed report!")
-            if st.button("Generate Report", type="primary"):
-                st.session_state.stage = 'report'
-                st.rerun()
-        else:
-            st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
-            st.write(f"Confidence Level: {eval_result['confidence_level']}%")
+        # Display questions immediately
+        if st.session_state.current_questions:
+            st.write("Let's start with some key questions about your business:")
             
-            # Display current questions
             for question in st.session_state.current_questions:
                 if question['question'] not in st.session_state.answered_questions:
                     with st.expander(f"Q: {question['question']}", expanded=True):
@@ -317,6 +301,26 @@ def main():
                                         "category": question['category'],
                                         "timestamp": datetime.now().isoformat()
                                     })
+        
+        # Evaluate responses and show progress
+        eval_result = evaluate_responses(st.session_state.qa_history)
+        
+        # Progress bar calculation
+        total_questions = len(st.session_state.qa_history) + eval_result['questions_needed']
+        if total_questions > 0:
+            progress = min(100, max(0, (len(st.session_state.qa_history) / total_questions) * 100))
+            st.progress(int(progress))  # Convert to integer to avoid float issues
+        else:
+            st.progress(0)  # Default to 0 if no questions yet
+        
+        if eval_result['enough_info']:
+            st.success("We have gathered sufficient information to generate a detailed report!")
+            if st.button("Generate Report", type="primary"):
+                st.session_state.stage = 'report'
+                st.rerun()
+        else:
+            st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
+            st.write(f"Confidence Level: {eval_result['confidence_level']}%")
             
             col1, col2 = st.columns(2)
             with col1:
