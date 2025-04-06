@@ -73,110 +73,180 @@ def get_business_basics() -> Dict:
 
 def evaluate_responses(qa_history: List[Dict]) -> Dict:
     """Evaluates the Q&A history to determine if enough information has been gathered."""
-    evaluation_prompt = f"""
-    You are an experienced business analyst evaluating a Q&A session between an investor and entrepreneur.
+    # Count questions by category
+    categories = {
+        'General': 0,
+        'Business Model': 0,
+        'Industry': 0
+    }
     
-    Q&A History:
-    {json.dumps(qa_history, indent=2)}
+    for qa in qa_history:
+        category = qa['category']
+        if category == 'General':
+            categories['General'] += 1
+        elif category in ['Business Model', 'Business Metrics', 'Business Operations']:
+            categories['Business Model'] += 1
+        elif category in ['Market Problem', 'Competition', 'Industry Trends']:
+            categories['Industry'] += 1
     
-    Please evaluate:
-    1. Do we have enough information to generate a comprehensive investment report?
-    2. What key areas still need more information?
-    3. How many more questions are needed (provide a number)?
-    4. What is the confidence level in the current information (0-100)?
-    5. What specific aspects need more detail?
+    # Define minimum requirements
+    min_general = 3
+    min_business = 3
+    min_industry = 3
     
-    Respond in JSON format with keys: 
-    - 'enough_info' (boolean)
-    - 'missing_areas' (list)
-    - 'questions_needed' (int)
-    - 'confidence_level' (int)
-    - 'needs_more_detail' (list of specific aspects)
-    """
+    missing_areas = []
+    if categories['General'] < min_general:
+        missing_areas.append('general')
+    if categories['Business Model'] < min_business:
+        missing_areas.append('business model')
+    if categories['Industry'] < min_industry:
+        missing_areas.append('industry specifics')
     
-    try:
-        response = model.generate_content(evaluation_prompt)
-        eval_result = json.loads(response.text)
-        return eval_result
-    except Exception as e:
-        logger.error(f"Failed to evaluate responses: {e}")
-        return {
-            "enough_info": False,
-            "missing_areas": ["general"],
-            "questions_needed": 3,
-            "confidence_level": 0,
-            "needs_more_detail": ["business model", "market opportunity"]
-        }
+    # Calculate confidence level based on completeness
+    total_questions_needed = min_general + min_business + min_industry
+    total_questions_answered = sum(categories.values())
+    confidence_level = min(100, int((total_questions_answered / total_questions_needed) * 100))
+    
+    return {
+        "enough_info": len(missing_areas) == 0,
+        "missing_areas": missing_areas,
+        "questions_needed": max(0, total_questions_needed - total_questions_answered),
+        "confidence_level": confidence_level,
+        "needs_more_detail": missing_areas
+    }
 
 def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) -> List[Dict]:
     """Gets relevant questions based on business info and previous responses."""
-    # Default questions that will be used if API calls fail
-    default_questions = [
+    # Default questions organized by category
+    default_general_questions = [
+        {
+            "question": "Could you give me an overview of your business and what inspired you to start it?",
+            "category": "General",
+            "follow_up": "What is your long-term vision for the company?"
+        },
+        {
+            "question": "How long have you been operating and what major milestones have you achieved?",
+            "category": "General",
+            "follow_up": "What are your next major milestones?"
+        },
+        {
+            "question": "Tell me about your team and their backgrounds.",
+            "category": "General",
+            "follow_up": "What key roles are you looking to fill in the next 12 months?"
+        }
+    ]
+    
+    default_business_questions = [
         {
             "question": f"Tell me about your business model. How do you make money?",
             "category": "Business Model",
             "follow_up": "Could you elaborate on your main revenue streams?"
         },
         {
+            "question": "What are your current key performance indicators (KPIs)?",
+            "category": "Business Metrics",
+            "follow_up": "How have these metrics changed over the past year?"
+        },
+        {
+            "question": "What is your customer acquisition strategy?",
+            "category": "Business Operations",
+            "follow_up": "What's your customer acquisition cost and lifetime value?"
+        }
+    ]
+    
+    default_industry_questions = [
+        {
             "question": f"What problem does your business solve in the {business_info['industry']} industry?",
             "category": "Market Problem",
             "follow_up": "How is your solution different from existing alternatives?"
         },
         {
-            "question": f"Who are your target customers and how do you reach them?",
-            "category": "Customer Acquisition",
-            "follow_up": "What's your customer acquisition cost and lifetime value?"
+            "question": f"Who are your main competitors in the {business_info['industry']} space?",
+            "category": "Competition",
+            "follow_up": "What gives you a competitive advantage?"
+        },
+        {
+            "question": f"What are the key trends affecting the {business_info['industry']} industry?",
+            "category": "Industry Trends",
+            "follow_up": "How are you positioned to capitalize on these trends?"
         }
     ]
 
     if not model:
         logger.error("Gemini model not initialized")
-        return default_questions
+        return default_general_questions
 
     try:
-        # Create a context for Gemini to generate personalized questions
-        context = f"""
-        You are an experienced investor evaluating a {business_info['industry']} company at the {business_info['stage']} stage.
-        Generate 3 specific business evaluation questions focusing on key metrics, market opportunity, and growth potential.
+        # Analyze previous responses to determine what type of questions to ask next
+        categories_asked = set(qa['category'] for qa in previous_responses)
+        general_questions_asked = len([qa for qa in previous_responses if qa['category'] == 'General'])
         
+        # Determine which type of questions to ask based on previous responses
+        if general_questions_asked < 3:
+            question_type = "general"
+            default_questions = default_general_questions
+            context = f"""
+            You are an experienced investor evaluating a new business opportunity.
+            Generate 3 general questions to understand the basic foundation of the business.
+            Focus on understanding the overall business, team, and vision.
+            """
+        elif 'Business Model' not in categories_asked or 'Business Metrics' not in categories_asked:
+            question_type = "business"
+            default_questions = default_business_questions
+            context = f"""
+            You are an experienced investor evaluating a {business_info['stage']} stage company.
+            Generate 3 specific questions about their business model, metrics, and operations.
+            Focus on understanding how the business works and its performance.
+            """
+        else:
+            question_type = "industry"
+            default_questions = default_industry_questions
+            context = f"""
+            You are an experienced investor evaluating a company in the {business_info['industry']} industry.
+            Generate 3 specific questions about their market position, competition, and industry trends.
+            Focus on understanding their competitive advantage and market opportunity.
+            """
+        
+        context += """
         Format your response as a JSON array like this:
         [
-            {{
-                "question": "What is your current monthly revenue?",
-                "category": "Financial Metrics",
-                "follow_up": "How has this grown over the past year?"
-            }}
+            {
+                "question": "Your question here?",
+                "category": "Question Category",
+                "follow_up": "Follow-up question here?"
+            }
         ]
-        
         Only return the JSON array, no other text.
         """
         
         response = model.generate_content(context)
         if not response or not response.text:
-            logger.warning("Empty response from Gemini API")
+            logger.warning(f"Empty response from Gemini API, using default {question_type} questions")
             return default_questions
 
         try:
             # Clean the response text to ensure it's valid JSON
             response_text = response.text.strip()
-            # Find the first '[' and last ']' to extract just the JSON array
             start = response_text.find('[')
             end = response_text.rfind(']') + 1
             if start == -1 or end == 0:
-                logger.warning("No JSON array found in response")
+                logger.warning(f"No JSON array found in response, using default {question_type} questions")
                 return default_questions
                 
             json_text = response_text[start:end]
             questions = json.loads(json_text)
             
             if not isinstance(questions, list):
-                logger.warning("Response is not a list")
+                logger.warning(f"Response is not a list, using default {question_type} questions")
                 return default_questions
 
             # Validate each question has required fields
             valid_questions = []
             for q in questions:
                 if isinstance(q, dict) and 'question' in q and 'category' in q:
+                    # Set the category based on the current question type
+                    if question_type == "general":
+                        q['category'] = "General"
                     valid_questions.append({
                         'question': q['question'],
                         'category': q['category'],
