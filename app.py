@@ -129,24 +129,27 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
         }
     ]
 
+    if not model:
+        logger.error("Gemini model not initialized")
+        return default_questions
+
     try:
         # Create a context for Gemini to generate personalized questions
-        context = """
-        Generate 3-5 specific business evaluation questions for a {industry} company at the {stage} stage.
-        Focus on key business metrics, market opportunity, and growth potential.
+        context = f"""
+        You are an experienced investor evaluating a {business_info['industry']} company at the {business_info['stage']} stage.
+        Generate 3 specific business evaluation questions focusing on key metrics, market opportunity, and growth potential.
         
-        Format: Return only a JSON array of question objects with the following structure:
+        Format your response as a JSON array like this:
         [
-            {
-                "question": "The question text",
-                "category": "Question category",
-                "follow_up": "Follow-up question"
-            }
+            {{
+                "question": "What is your current monthly revenue?",
+                "category": "Financial Metrics",
+                "follow_up": "How has this grown over the past year?"
+            }}
         ]
-        """.format(
-            industry=business_info['industry'],
-            stage=business_info['stage']
-        )
+        
+        Only return the JSON array, no other text.
+        """
         
         response = model.generate_content(context)
         if not response or not response.text:
@@ -156,14 +159,18 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
         try:
             # Clean the response text to ensure it's valid JSON
             response_text = response.text.strip()
-            if not response_text.startswith('['):
-                response_text = response_text[response_text.find('['):]
-            if not response_text.endswith(']'):
-                response_text = response_text[:response_text.rfind(']')+1]
+            # Find the first '[' and last ']' to extract just the JSON array
+            start = response_text.find('[')
+            end = response_text.rfind(']') + 1
+            if start == -1 or end == 0:
+                logger.warning("No JSON array found in response")
+                return default_questions
+                
+            json_text = response_text[start:end]
+            questions = json.loads(json_text)
             
-            questions = json.loads(response_text)
-            if not isinstance(questions, list) or len(questions) == 0:
-                logger.warning("Invalid questions format from Gemini API")
+            if not isinstance(questions, list):
+                logger.warning("Response is not a list")
                 return default_questions
 
             # Validate each question has required fields
@@ -176,11 +183,13 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
                         'follow_up': q.get('follow_up', 'Could you elaborate on that?')
                     })
 
-            if len(valid_questions) < 3:
-                logger.warning(f"Not enough valid questions ({len(valid_questions)}), using defaults")
-                return default_questions
+            # If we don't have enough valid questions, add some defaults
+            while len(valid_questions) < 3:
+                for q in default_questions:
+                    if len(valid_questions) < 3 and q not in valid_questions:
+                        valid_questions.append(q)
 
-            return valid_questions
+            return valid_questions[:3]  # Return exactly 3 questions
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse generated questions: {e}")
@@ -278,51 +287,54 @@ def main():
         # Display questions
         st.write("Let's start with some key questions about your business:")
         
-        for idx, question in enumerate(st.session_state.current_questions):
-            if question['question'] not in st.session_state.answered_questions:
-                with st.expander(f"Q: {question['question']}", expanded=True):
-                    response = st.text_area(
-                        "Your Answer:",
-                        key=f"q_{idx}_{hash(question['question'])}"
-                    )
-                    
-                    if st.button("Submit Answer", key=f"submit_{idx}"):
-                        if response:
-                            st.session_state.qa_history.append({
-                                "question": question['question'],
-                                "answer": response,
-                                "category": question['category'],
-                                "timestamp": datetime.now().isoformat()
-                            })
-                            st.session_state.answered_questions.add(question['question'])
-                            
-                            # Check if answer needs follow-up
-                            follow_up = st.checkbox(
-                                "Would you like to provide more detail?",
-                                key=f"fu_{idx}_{hash(question['question'])}"
-                            )
-                            
-                            if follow_up:
-                                follow_up_response = st.text_area(
-                                    "Additional Details:",
-                                    key=f"f_{idx}_{hash(question['question'])}"
-                                )
-                                if follow_up_response:
-                                    st.session_state.qa_history.append({
-                                        "question": question['follow_up'],
-                                        "answer": follow_up_response,
-                                        "category": question['category'],
-                                        "timestamp": datetime.now().isoformat()
-                                    })
-                            st.rerun()
+        # Create columns for better layout
+        col1, col2 = st.columns([3, 1])
         
-        # Show progress information
-        st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
-        st.write(f"Confidence Level: {eval_result['confidence_level']}%")
-        
-        # Navigation buttons
-        col1, col2 = st.columns(2)
         with col1:
+            for idx, question in enumerate(st.session_state.current_questions):
+                if question['question'] not in st.session_state.answered_questions:
+                    with st.expander(f"Q: {question['question']}", expanded=True):
+                        response = st.text_area(
+                            "Your Answer:",
+                            key=f"q_{idx}_{hash(question['question'])}"
+                        )
+                        
+                        if st.button("Submit Answer", key=f"submit_{idx}"):
+                            if response:
+                                st.session_state.qa_history.append({
+                                    "question": question['question'],
+                                    "answer": response,
+                                    "category": question['category'],
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                                st.session_state.answered_questions.add(question['question'])
+                                
+                                # Check if answer needs follow-up
+                                follow_up = st.checkbox(
+                                    "Would you like to provide more detail?",
+                                    key=f"fu_{idx}_{hash(question['question'])}"
+                                )
+                                
+                                if follow_up:
+                                    follow_up_response = st.text_area(
+                                        "Additional Details:",
+                                        key=f"f_{idx}_{hash(question['question'])}"
+                                    )
+                                    if follow_up_response:
+                                        st.session_state.qa_history.append({
+                                            "question": question['follow_up'],
+                                            "answer": follow_up_response,
+                                            "category": question['category'],
+                                            "timestamp": datetime.now().isoformat()
+                                        })
+                                st.rerun()
+        
+        with col2:
+            # Show progress information
+            st.info(f"Areas needing more info:\n{', '.join(eval_result['missing_areas'])}")
+            st.write(f"Confidence Level: {eval_result['confidence_level']}%")
+            
+            # Navigation buttons
             if st.button("Continue Assessment", type="primary"):
                 # Generate new questions for the next round
                 st.session_state.current_questions = get_relevant_questions(
@@ -330,17 +342,17 @@ def main():
                     st.session_state.qa_history
                 )
                 st.rerun()
-        with col2:
+            
             if st.button("Start Over", type="secondary"):
                 st.session_state.clear()
                 st.rerun()
-                
-        # Check if we have enough information for a report
-        if eval_result['enough_info']:
-            st.success("We have gathered sufficient information to generate a detailed report!")
-            if st.button("Generate Report", type="primary"):
-                st.session_state.stage = 'report'
-                st.rerun()
+            
+            # Check if we have enough information for a report
+            if eval_result['enough_info']:
+                st.success("Ready to generate report!")
+                if st.button("Generate Report", type="primary"):
+                    st.session_state.stage = 'report'
+                    st.rerun()
     
     # Report Stage
     elif st.session_state.stage == 'report':
