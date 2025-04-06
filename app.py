@@ -110,6 +110,25 @@ def evaluate_responses(qa_history: List[Dict]) -> Dict:
 
 def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) -> List[Dict]:
     """Gets relevant questions based on business info and previous responses."""
+    # Default questions that will be used if API calls fail
+    default_questions = [
+        {
+            "question": f"Tell me about your business model. How do you make money?",
+            "category": "Business Model",
+            "follow_up": "Could you elaborate on your main revenue streams?"
+        },
+        {
+            "question": f"What problem does your business solve in the {business_info['industry']} industry?",
+            "category": "Market Problem",
+            "follow_up": "How is your solution different from existing alternatives?"
+        },
+        {
+            "question": f"Who are your target customers and how do you reach them?",
+            "category": "Customer Acquisition",
+            "follow_up": "What's your customer acquisition cost and lifetime value?"
+        }
+    ]
+
     try:
         # Create a context for Gemini to generate personalized questions
         context = f"""
@@ -138,61 +157,39 @@ def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) 
         """
         
         response = model.generate_content(context)
+        if not response or not response.text:
+            logger.warning("Empty response from Gemini API")
+            return default_questions
+
         try:
             questions = json.loads(response.text)
-            # Ensure we have at least 3 questions
-            if len(questions) < 3:
-                # Generate more questions if needed
-                additional_context = f"""
-                We need more questions. Please generate {3 - len(questions)} more questions about:
-                - Business model and revenue streams
-                - Market opportunity and competition
-                - Growth strategy and scalability
-                """
-                additional_response = model.generate_content(additional_context)
-                additional_questions = json.loads(additional_response.text)
-                questions.extend(additional_questions)
-            return questions
+            if not isinstance(questions, list) or len(questions) == 0:
+                logger.warning("Invalid questions format from Gemini API")
+                return default_questions
+
+            # Validate each question has required fields
+            valid_questions = []
+            for q in questions:
+                if isinstance(q, dict) and 'question' in q and 'category' in q:
+                    valid_questions.append({
+                        'question': q['question'],
+                        'category': q['category'],
+                        'follow_up': q.get('follow_up', 'Could you elaborate on that?')
+                    })
+
+            if len(valid_questions) < 3:
+                logger.warning("Not enough valid questions from Gemini API")
+                return default_questions
+
+            return valid_questions
+
         except json.JSONDecodeError:
             logger.error("Failed to parse generated questions")
-            # Return default questions if parsing fails
-            return [
-                {
-                    "question": f"Tell me about your business model. How do you make money?",
-                    "category": "Business Model",
-                    "follow_up": "Could you elaborate on your main revenue streams?"
-                },
-                {
-                    "question": f"What problem does your business solve in the {business_info['industry']} industry?",
-                    "category": "Market Problem",
-                    "follow_up": "How is your solution different from existing alternatives?"
-                },
-                {
-                    "question": f"Who are your target customers and how do you reach them?",
-                    "category": "Customer Acquisition",
-                    "follow_up": "What's your customer acquisition cost and lifetime value?"
-                }
-            ]
+            return default_questions
+
     except Exception as e:
         logger.error(f"Failed to get relevant questions: {e}")
-        # Return default questions if generation fails
-        return [
-            {
-                "question": f"Tell me about your business model. How do you make money?",
-                "category": "Business Model",
-                "follow_up": "Could you elaborate on your main revenue streams?"
-            },
-            {
-                "question": f"What problem does your business solve in the {business_info['industry']} industry?",
-                "category": "Market Problem",
-                "follow_up": "How is your solution different from existing alternatives?"
-            },
-            {
-                "question": f"Who are your target customers and how do you reach them?",
-                "category": "Customer Acquisition",
-                "follow_up": "What's your customer acquisition cost and lifetime value?"
-            }
-        ]
+        return default_questions
 
 def generate_report(business_info: Dict, qa_history: List[Dict]) -> str:
     """Generates a comprehensive investment report."""
