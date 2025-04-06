@@ -56,21 +56,27 @@ def get_business_basics() -> Dict:
         stage = st.selectbox("What stage is your business in?",
                            ["Idea Stage", "Pre-Seed", "Seed", "Series A", "Growth", "Mature"],
                            help="Select your current business development stage")
-        funding_needed = st.number_input("How much funding are you seeking? (in USD)",
-                                       min_value=0,
-                                       help="Enter the amount of funding you're seeking")
+        seeking_funding = st.checkbox("Are you seeking investment?", value=False)
+        funding_needed = None
+        if seeking_funding:
+            funding_needed = st.number_input("How much funding are you seeking? (in USD)",
+                                           min_value=0,
+                                           help="Enter the amount of funding you're seeking")
     
     return {
         "name": business_name,
         "industry": industry,
         "stage": stage,
-        "funding_needed": funding_needed
+        "funding_needed": funding_needed,
+        "seeking_funding": seeking_funding
     }
 
 def evaluate_responses(qa_history: List[Dict]) -> Dict:
     """Evaluates the Q&A history to determine if enough information has been gathered."""
     evaluation_prompt = f"""
-    Based on these Q&A interactions:
+    You are an experienced business analyst evaluating a Q&A session between an investor and entrepreneur.
+    
+    Q&A History:
     {json.dumps(qa_history, indent=2)}
     
     Please evaluate:
@@ -78,12 +84,14 @@ def evaluate_responses(qa_history: List[Dict]) -> Dict:
     2. What key areas still need more information?
     3. How many more questions are needed (provide a number)?
     4. What is the confidence level in the current information (0-100)?
+    5. What specific aspects need more detail?
     
     Respond in JSON format with keys: 
     - 'enough_info' (boolean)
     - 'missing_areas' (list)
     - 'questions_needed' (int)
     - 'confidence_level' (int)
+    - 'needs_more_detail' (list of specific aspects)
     """
     
     try:
@@ -96,33 +104,46 @@ def evaluate_responses(qa_history: List[Dict]) -> Dict:
             "enough_info": False,
             "missing_areas": ["general"],
             "questions_needed": 3,
-            "confidence_level": 0
+            "confidence_level": 0,
+            "needs_more_detail": ["business model", "market opportunity"]
         }
 
 def get_relevant_questions(business_info: Dict, previous_responses: List[Dict]) -> List[Dict]:
     """Gets relevant questions based on business info and previous responses."""
     try:
+        # Create a context for Gemini to generate personalized questions
         context = f"""
-        Business Name: {business_info['name']}
-        Industry: {business_info['industry']}
-        Stage: {business_info['stage']}
-        Funding Needed: ${business_info['funding_needed']:,.2f}
-        Previous Responses: {json.dumps(previous_responses, indent=2)}
+        You are an experienced investor from Shark Tank/Dragon's Den. You're evaluating a business with these details:
+        - Business Name: {business_info['name']}
+        - Industry: {business_info['industry']}
+        - Stage: {business_info['stage']}
+        {f"- Seeking Funding: ${business_info['funding_needed']:,.2f}" if business_info['seeking_funding'] else "- Not seeking funding"}
         
-        Based on this information, what are the most critical areas we need to explore next?
-        Focus on gathering information about: {', '.join(evaluate_responses(previous_responses)['missing_areas'])}
+        Previous Q&A:
+        {json.dumps(previous_responses, indent=2)}
+        
+        Based on this information, generate 3-5 personalized, conversational questions that:
+        1. Feel natural and engaging, like a real investor conversation
+        2. Are specific to their industry and business stage
+        3. Build upon previous answers
+        4. Help uncover critical business insights
+        5. Use a friendly but professional tone
+        
+        Format each question as a JSON object with:
+        - question: The actual question text
+        - category: The business aspect it addresses
+        - follow_up: A suggested follow-up question if the answer is unsatisfactory
+        
+        Return a JSON array of these questions.
         """
         
         response = model.generate_content(context)
-        category = response.text
-        
-        eval_result = evaluate_responses(previous_responses)
-        questions = questions_collection.find({
-            "category": {"$regex": category, "$options": "i"},
-            "stage": business_info['stage']
-        }).limit(eval_result['questions_needed'])
-        
-        return list(questions)
+        try:
+            questions = json.loads(response.text)
+            return questions
+        except json.JSONDecodeError:
+            logger.error("Failed to parse generated questions")
+            return []
     except Exception as e:
         logger.error(f"Failed to get relevant questions: {e}")
         return []
@@ -177,6 +198,8 @@ def main():
         st.session_state.stage = 'basics'
         st.session_state.qa_history = []
         st.session_state.business_info = None
+        st.session_state.current_questions = []
+        st.session_state.answered_questions = set()
     
     # Business Basics Stage
     if st.session_state.stage == 'basics':
@@ -184,6 +207,10 @@ def main():
         if st.button("Start Assessment", type="primary"):
             if validate_business_info(st.session_state.business_info):
                 st.session_state.stage = 'questioning'
+                st.session_state.current_questions = get_relevant_questions(
+                    st.session_state.business_info,
+                    st.session_state.qa_history
+                )
                 st.rerun()
             else:
                 st.error("Please fill in all required fields.")
@@ -208,24 +235,42 @@ def main():
             st.info(f"We need more information about: {', '.join(eval_result['missing_areas'])}")
             st.write(f"Confidence Level: {eval_result['confidence_level']}%")
             
-            relevant_questions = get_relevant_questions(
-                st.session_state.business_info, 
-                st.session_state.qa_history
-            )
+            # Get new questions if needed
+            if not st.session_state.current_questions:
+                st.session_state.current_questions = get_relevant_questions(
+                    st.session_state.business_info,
+                    st.session_state.qa_history
+                )
             
-            for question in relevant_questions:
-                with st.expander(f"Q: {question['question']}"):
-                    response = st.text_area("Your Answer:", key=f"q_{question['_id']}")
-                    if response:
-                        st.session_state.qa_history.append({
-                            "question": question['question'],
-                            "answer": response,
-                            "timestamp": datetime.now().isoformat()
-                        })
+            # Display current questions
+            for question in st.session_state.current_questions:
+                if question['question'] not in st.session_state.answered_questions:
+                    with st.expander(f"Q: {question['question']}"):
+                        response = st.text_area("Your Answer:", key=f"q_{hash(question['question'])}")
+                        if response:
+                            st.session_state.qa_history.append({
+                                "question": question['question'],
+                                "answer": response,
+                                "category": question['category'],
+                                "timestamp": datetime.now().isoformat()
+                            })
+                            st.session_state.answered_questions.add(question['question'])
+                            
+                            # Check if answer needs follow-up
+                            if 'follow_up' in question and st.checkbox("Would you like to elaborate further?"):
+                                follow_up_response = st.text_area("Follow-up:", key=f"f_{hash(question['question'])}")
+                                if follow_up_response:
+                                    st.session_state.qa_history.append({
+                                        "question": question['follow_up'],
+                                        "answer": follow_up_response,
+                                        "category": question['category'],
+                                        "timestamp": datetime.now().isoformat()
+                                    })
             
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("Continue Assessment", type="primary"):
+                    st.session_state.current_questions = []
                     st.rerun()
             with col2:
                 if st.button("Start Over", type="secondary"):
