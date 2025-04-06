@@ -331,7 +331,7 @@ if 'valuation_data' not in st.session_state:
     st.session_state.valuation_data = {}
 if 'assessment_responses' not in st.session_state:
     st.session_state.assessment_responses = {}
-if 'current_question_idx' not in st.session `_state:
+if 'current_question_idx' not in st.session_state:
     st.session_state.current_question_idx = 0
 if 'valuation_step' not in st.session_state:
     st.session_state.valuation_step = 0
