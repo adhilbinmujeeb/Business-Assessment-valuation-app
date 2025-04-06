@@ -346,10 +346,11 @@ def main():
    # Corrected line 346
 if question_collection is not None and not st.session_state.all_questions_loaded:
     with st.spinner("Loading question bank..."):
-            st.session_state.all_questions = load_all_questions(question_collection)
+        st.session_state.all_questions = load_all_questions(question_collection)
             if not st.session_state.all_questions:
                  st.error("Question bank appears empty or failed to load correctly. Cannot proceed.")
                  st.stop() # Halt execution if no questions
+            
          
 
 
