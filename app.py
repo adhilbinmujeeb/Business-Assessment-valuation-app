@@ -276,10 +276,13 @@ def main():
         
         eval_result = evaluate_responses(st.session_state.qa_history)
         
-        # Progress bar
-        progress = min(100, (len(st.session_state.qa_history) / 
-                           (len(st.session_state.qa_history) + eval_result['questions_needed'])) * 100)
-        st.progress(progress)
+        # Progress bar calculation
+        total_questions = len(st.session_state.qa_history) + eval_result['questions_needed']
+        if total_questions > 0:
+            progress = min(100, max(0, (len(st.session_state.qa_history) / total_questions) * 100))
+            st.progress(int(progress))  # Convert to integer to avoid float issues
+        else:
+            st.progress(0)  # Default to 0 if no questions yet
         
         if eval_result['enough_info']:
             st.success("We have gathered sufficient information to generate a detailed report!")
