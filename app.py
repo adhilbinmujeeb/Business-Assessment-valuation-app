@@ -113,7 +113,7 @@ else:
 
 # Gemini API Setup
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-2.5-pro-preview-03-25')  # Adjust model name as per Gemini API documentation
+gemini_model = genai.GenerativeModel('gemini-2.0-flash-thinking-exp-01-21')  # Adjust model name as per Gemini API documentation
 
 # Helper Functions
 def safe_float(value, default=0):
