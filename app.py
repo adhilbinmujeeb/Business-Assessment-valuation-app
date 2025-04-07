@@ -1,3 +1,4 @@
+import statistics 
 import streamlit as st
 import pymongo
 from pymongo import MongoClient
@@ -346,157 +347,347 @@ else:
     sample_query = ""
 
 # 2. Company Valuation Estimator
-if "Company Valuation" in page:
+if page == "💰 Company Valuation":
     st.markdown("# 💰 Company Valuation Estimator")
-    st.markdown("Estimate your company's value using multiple industry-standard valuation methods.")
+    st.markdown("Estimate your company's value using standard methods benchmarked against real pitch data.")
 
-    valuation_questions = [
-        "What is your company's annual revenue (in USD)?",
-        "What are your company's annual earnings (net income, in USD)?",
-        "What is your company's EBITDA (Earnings Before Interest, Taxes, Depreciation, and Amortization, in USD)?",
-        "What industry does your company operate in?",
-        "What is your company's total assets value (in USD)?",
-        "What is your company's total liabilities (in USD)?",
-        "What are your projected cash flows for the next 5 years (comma-separated, in USD)?",
-        "What is your company's growth rate (e.g., High, Moderate, Low)?"
-    ]
-
-    total_steps = len(valuation_questions)
-    current_step = st.session_state.valuation_step
-
-    st.progress(current_step / total_steps)
-    st.markdown(f"##### Step {current_step + 1} of {total_steps}")
-
-    if current_step < total_steps:
+    # --- Step 0: Collect Basic Info (Name, Industry, Revenue) ---
+    if st.session_state.valuation_step == 0:
+        st.progress(0 / 4)
+        st.markdown("##### Step 1 of 4: Basic Information")
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        current_question = valuation_questions[current_step]
-        st.markdown(f"### {current_question}")
+        st.markdown("### Tell us about your company")
 
-        help_texts = {
-            0: "Enter your total annual revenue before expenses.",
-            1: "Enter your annual profit after all expenses and taxes.",
-            2: "EBITDA = Earnings Before Interest, Taxes, Depreciation, and Amortization.",
-            3: "Select the industry that best describes your business.",
-            4: "Total value of all assets owned by your company.",
-            5: "Total of all debts and obligations owed by your company.",
-            6: "Estimate your cash flows for each of the next 5 years, separated by commas.",
-            7: "Assess your company's growth trend compared to industry standards."
-        }
+        company_name = st.text_input(
+            "What is your Company Name?",
+            key="val_company_name",
+            placeholder="Enter your company name here",
+            value=st.session_state.valuation_data.get('company_name', '') # Retain value if going back
+        )
 
-        if current_step in help_texts:
-            st.markdown(f"*{help_texts[current_step]}*")
+        industry = st.selectbox(
+            "What industry best describes your company?",
+            st.session_state.available_industries,
+            key="val_industry",
+            index=st.session_state.available_industries.index(st.session_state.valuation_data.get('industry')) if st.session_state.valuation_data.get('industry') in st.session_state.available_industries else 0,
+            help="Select the closest matching industry."
+        )
+        revenue = st.number_input(
+            "What is your company's most recent Annual Revenue (USD)?",
+            min_value=0.0,
+            step=1000.0,
+            format="%.2f",
+            key="val_revenue",
+            value=st.session_state.valuation_data.get('revenue', 0.0), # Retain value
+            help="Total sales/turnover over the last 12 months."
+        )
 
-        if current_step in [0, 1, 2, 4, 5]:
-            answer = st.number_input("USD", min_value=0, step=1000, format="%i", key=f"val_step_{current_step}")
-            answer = str(answer)
-        elif current_step == 3:
-            industries = ["Software/SaaS", "E-commerce", "Manufacturing", "Retail", "Healthcare", "Financial Services", "Real Estate", "Hospitality", "Technology", "Energy", "Other"]
-            answer = st.selectbox("Select", industries, key=f"val_step_{current_step}")
-        elif current_step == 6:
-            year_cols = st.columns(5)
-            cash_flows = []
-            for i, col in enumerate(year_cols):
-                with col:
-                    cf = col.number_input(f"Year {i+1}", min_value=0, step=1000, format="%i", key=f"cf_{i}")
-                    cash_flows.append(str(cf))
-            answer = ",".join(cash_flows)
-        elif current_step == 7:
-            answer = st.select_slider("Select", options=["Low", "Moderate", "High"], key=f"val_step_{current_step}")
+        if st.button("Next: Get Benchmarks", use_container_width=True):
+            # Validation checks
+            if not company_name.strip():
+                st.warning("Please enter your company name.")
+            elif industry == "Select an Industry...":
+                st.warning("Please select a valid industry.")
+            elif revenue <= 0:
+                 st.warning("Please enter a positive annual revenue.")
+            else:
+                # Store initial data
+                st.session_state.valuation_data['company_name'] = company_name.strip()
+                st.session_state.valuation_data['industry'] = industry
+                st.session_state.valuation_data['revenue'] = revenue
+                # Reset benchmarks from previous runs before fetching new ones
+                st.session_state.benchmarks = None
+                st.session_state.comparables = None
 
-        col1, col2 = st.columns([1, 5])
-        with col1:
-            if current_step > 0:
-                if st.button("Back"):
-                    st.session_state.valuation_step -= 1
+                with st.spinner(f"Finding comparable deals for '{industry}'..."):
+                    time.sleep(0.5) # Small delay for spinner visibility
+                    st.session_state.comparables = get_comparable_deals(industry, listings_collection)
+
+                    if st.session_state.comparables:
+                         st.session_state.benchmarks = calculate_sharktank_benchmarks(st.session_state.comparables)
+                         # Check if benchmarks are meaningful
+                         if st.session_state.benchmarks and st.session_state.benchmarks.get("count", 0) > 2: # Require at least 3 deals for meaningful benchmarks
+                            st.session_state.valuation_step = 1 # Move to show benchmarks
+                            st.rerun()
+                         else:
+                            st.warning(f"Found only {st.session_state.benchmarks.get('count', 0)} comparable deals for '{industry}'. Proceeding without specific dataset benchmarks.")
+                            st.session_state.benchmarks = None # Ensure benchmarks are None
+                            st.session_state.valuation_step = 2 # Skip benchmark display
+                            st.rerun()
+                    else:
+                         st.warning(f"Could not find comparable deals for '{industry}' in the dataset. Proceeding without dataset benchmarks.")
+                         st.session_state.benchmarks = None # Ensure benchmarks are None
+                         st.session_state.valuation_step = 2 # Skip benchmark display
+                         st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Step 1: Display Benchmarks (if found and valid) ---
+    elif st.session_state.valuation_step == 1:
+        # Double-check if benchmarks exist (in case user navigates weirdly)
+        if not st.session_state.benchmarks or st.session_state.benchmarks.get("count", 0) <= 2:
+            st.warning("Benchmarks not available or insufficient for this industry. Please proceed to enter financial details.")
+            st.session_state.valuation_step = 2 # Move user forward
+            time.sleep(1) # Allow message visibility
+            st.rerun()
+        else:
+            st.progress(1 / 4)
+            st.markdown("##### Step 2 of 4: Dataset Benchmarks")
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            b = st.session_state.benchmarks
+            industry_name = st.session_state.valuation_data.get('industry','N/A')
+            st.markdown(f"### Benchmarks from {b['count']} Deals in '{industry_name}'")
+            st.caption("_Note: Based on data from investor pitches. Reflects negotiated outcomes._")
+
+            # Function to format metrics consistently
+            def fmt_usd(value): return f"${value:,.0f}"
+            def fmt_mult(value): return f"{value:.2f}x" if value else "N/A"
+            def fmt_pct(value): return f"{value:.1f}%" if value else "N/A"
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                 with st.container(border=True): # Use border container for metric groups
+                    st.metric(label="Median Deal Valuation", value=fmt_usd(b.get('median_deal_valuation')))
+                    st.metric(label="Avg Deal Valuation", value=fmt_usd(b.get('avg_deal_valuation')))
+            with col2:
+                 with st.container(border=True):
+                    st.metric(label="Median Valuation / Revenue", value=fmt_mult(b.get('median_valuation_revenue_multiple')))
+                    st.metric(label="Median Valuation / Profit", value=fmt_mult(b.get('median_valuation_profit_multiple')))
+            with col3:
+                with st.container(border=True):
+                    st.metric(label="Median Equity Pledged", value=fmt_pct(b.get('median_equity_percentage')))
+                    st.metric(label="Avg Equity Pledged", value=fmt_pct(b.get('avg_equity_percentage')))
+
+            st.markdown("---")
+            col_back, col_next = st.columns([1, 6]) # Adjust button column ratios
+            with col_back:
+                 if st.button("Back", key="back_step1", type="secondary"): # Use secondary style
+                    st.session_state.valuation_step = 0
+                    # Keep valuation data like name/industry/revenue if user goes back
+                    st.session_state.benchmarks = None # Clear benchmarks
+                    st.session_state.comparables = None
                     st.rerun()
-        with col2:
-            if st.button("Next", use_container_width=True):
-                st.session_state.valuation_data[current_question] = answer
-                st.session_state.valuation_step += 1
+            with col_next:
+                if st.button("Next: Add Financial Details", key="next_step1", use_container_width=True):
+                    st.session_state.valuation_step = 2
+                    st.rerun()
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+     # --- Step 2: Collect Remaining Financials ---
+    elif st.session_state.valuation_step == 2:
+        st.progress(2 / 4)
+        st.markdown("##### Step 3 of 4: Additional Financial Details")
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("### Provide more financial context")
+        st.caption("(Optional, but improves valuation analysis)")
+
+        earnings = st.number_input(
+            "Annual Earnings/Net Profit (USD)?",
+             value=st.session_state.valuation_data.get('earnings', 0.0), # Retain value
+             step=1000.0, format="%.2f", key="val_earnings",
+             help="Enter Net Income after expenses & taxes (can be negative)."
+        )
+        assets = st.number_input(
+            "Total Assets value (USD)?",
+            min_value=0.0, step=1000.0, format="%.2f", key="val_assets",
+            value=st.session_state.valuation_data.get('assets', 0.0), # Retain value
+            help="Total value of everything the company owns."
+        )
+        liabilities = st.number_input(
+            "Total Liabilities (USD)?",
+            min_value=0.0, step=1000.0, format="%.2f", key="val_liabilities",
+             value=st.session_state.valuation_data.get('liabilities', 0.0), # Retain value
+            help="Total of all debts and obligations the company owes."
+        )
+        growth = st.select_slider(
+             "Estimate Annual Growth Rate (Next 1-3 Years)",
+             options=["<0% (Declining)", "0-10% (Low)", "10-25% (Moderate)", "25-50% (High)", ">50% (Very High)"],
+             key="val_growth", value=st.session_state.valuation_data.get('growth', "10-25% (Moderate)"),
+             help="Estimate revenue growth rate over the next 1-3 years."
+        )
+
+        st.markdown("---")
+        col_back, col_calc = st.columns([1, 6]) # Adjust ratios
+        with col_back:
+             if st.button("Back", key="back_step2", type="secondary"):
+                 # Go back to benchmark display only if benchmarks were successfully calculated
+                 if st.session_state.benchmarks and st.session_state.benchmarks.get("count", 0) > 2:
+                     st.session_state.valuation_step = 1
+                 else: # Otherwise, go back to the start
+                     st.session_state.valuation_step = 0
+                 st.rerun()
+        with col_calc:
+             if st.button("Calculate Valuation", key="calc_val", use_container_width=True):
+                # Store collected data
+                st.session_state.valuation_data['earnings'] = earnings
+                st.session_state.valuation_data['assets'] = assets
+                st.session_state.valuation_data['liabilities'] = liabilities
+                st.session_state.valuation_data['growth'] = growth
+                st.session_state.valuation_step = 3 # Move to results
                 st.rerun()
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    if current_step >= total_steps:
+    # --- Step 3: Calculate and Display Valuation + Comparables ---
+    elif st.session_state.valuation_step == 3:
+        st.progress(3 / 4)
+        st.markdown("##### Step 4 of 4: Valuation Analysis")
+
+        # --- Summary Card ---
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("### Company Information Summary")
+        user_company_name = st.session_state.valuation_data.get('company_name', 'Your Company')
+        st.markdown(f"### Analysis Summary for: **{user_company_name}**")
+
+        data = st.session_state.valuation_data
+        benchmarks = st.session_state.benchmarks
+
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**Industry:**")
-            st.markdown("**Annual Revenue:**")
-            st.markdown("**Net Income:**")
-            st.markdown("**EBITDA:**")
+            st.markdown("**Your Input Data:**")
+            st.markdown(f"- Industry: `{data.get('industry', 'N/A')}`")
+            st.markdown(f"- Revenue: `${safe_float(data.get('revenue')):,.0f}`") # Cleaned format
+            st.markdown(f"- Earnings: `${safe_float(data.get('earnings')):,.0f}`")
+            st.markdown(f"- Assets: `${safe_float(data.get('assets')):,.0f}`")
+            st.markdown(f"- Liabilities: `${safe_float(data.get('liabilities')):,.0f}`")
+            st.markdown(f"- Growth: `{data.get('growth', 'N/A')}`")
         with col2:
-            st.markdown(f"{st.session_state.valuation_data.get(valuation_questions[3], 'N/A')}")
-            st.markdown(f"${safe_float(st.session_state.valuation_data.get(valuation_questions[0], '0')):,.2f}")
-            st.markdown(f"${safe_float(st.session_state.valuation_data.get(valuation_questions[1], '0')):,.2f}")
-            st.markdown(f"${safe_float(st.session_state.valuation_data.get(valuation_questions[2], '0')):,.2f}")
+             st.markdown("**Dataset Benchmarks:**")
+             if benchmarks and benchmarks.get("count", 0) > 2:
+                # Use helper formats defined earlier
+                st.markdown(f"_(Based on {benchmarks['count']} comparable deals)_")
+                st.markdown(f"- Median Deal Val: `{fmt_usd(benchmarks.get('median_deal_valuation'))}`")
+                st.markdown(f"- Median Val/Revenue: `{fmt_mult(benchmarks.get('median_valuation_revenue_multiple'))}`")
+                st.markdown(f"- Median Val/Profit: `{fmt_mult(benchmarks.get('median_valuation_profit_multiple'))}`")
+             else:
+                 st.markdown("_Insufficient comparable deals found in dataset for specific benchmarks._")
+        st.markdown("</div>", unsafe_allow_html=True) # Close Summary Card
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        revenue = safe_float(st.session_state.valuation_data.get(valuation_questions[0], "0"))
-        earnings = safe_float(st.session_state.valuation_data.get(valuation_questions[1], "0"))
-        ebitda = safe_float(st.session_state.valuation_data.get(valuation_questions[2], "0"))
-        industry = st.session_state.valuation_data.get(valuation_questions[3], "Other")
-        assets = safe_float(st.session_state.valuation_data.get(valuation_questions[4], "0"))
-        liabilities = safe_float(st.session_state.valuation_data.get(valuation_questions[5], "0"))
-        cash_flows_str = st.session_state.valuation_data.get(valuation_questions[6], "0,0,0,0,0")
-        cash_flows = [safe_float(cf) for cf in cash_flows_str.split(",")]
-        growth = st.session_state.valuation_data.get(valuation_questions[7], "Low")
-
-        industry_data_list = list(business_collection.find({"Business Attributes.Business Fundamentals.Industry Classification.Primary Industry": industry}))
-        industry_avg_pe = 15.0
-        industry_avg_ebitda_multiple = 8.0
-        if industry_data_list:
-            pe_list = [b.get('Business Attributes', {}).get('Financial Metrics', {}).get('P/E Ratio', industry_avg_pe) for b in industry_data_list]
-            ebitda_list = [b.get('Business Attributes', {}).get('Financial Metrics', {}).get('EV/EBITDA Multiple', industry_avg_ebitda_multiple) for b in industry_data_list]
-            industry_avg_pe = np.mean([float(p) for p in pe_list if isinstance(p, (int, float)) and p > 0]) if any(isinstance(p, (int, float)) and p > 0 for p in pe_list) else industry_avg_pe
-            industry_avg_ebitda_multiple = np.mean([float(e) for e in ebitda_list if isinstance(e, (int, float)) and e > 0]) if any(isinstance(e, (int, float)) and e > 0 for e in ebitda_list) else industry_avg_ebitda_multiple
-
-        with st.spinner("Calculating company valuation..."):
-            valuation_prompt = f"""
-            You are an expert in business valuation. Given the following data about a company and industry benchmarks, calculate its valuation using all applicable methods:
-            - Company Data:
-              - Annual Revenue: ${revenue:,.2f}
-              - Annual Earnings (Net Income): ${earnings:,.2f}
-              - EBITDA: ${ebitda:,.2f}
-              - Industry: {industry}
-              - Total Assets: ${assets:,.2f}
-              - Total Liabilities: ${liabilities:,.2f}
-              - Projected Cash Flows (5 years): {', '.join([f'${cf:,.2f}' for cf in cash_flows])}
-              - Growth Rate: {growth}
-            - Industry Benchmarks:
-              - Average P/E Ratio: {industry_avg_pe}
-              - Average EV/EBITDA Multiple: {industry_avg_ebitda_multiple}
-
-            Valuation Methods to Use:
-            1. Market-Based:
-               - Comparable Company Analysis (CCA): Use P/E Ratio (Company Value = Earnings × P/E Multiple) and EV/EBITDA.
-               - Precedent Transactions: Suggest a multiplier based on industry norms if data is insufficient.
-            2. Income-Based:
-               - Discounted Cash Flow (DCF): Use a discount rate of 10% (WACC) unless industry suggests otherwise. Formula: Sum(CF_t / (1 + r)^t).
-               - Earnings Multiplier (EV/EBITDA): Enterprise Value = EBITDA × Industry Multiple.
-            3. Asset-Based:
-               - Book Value: Assets - Liabilities.
-               - Liquidation Value: Estimate based on assets (assume 70% recovery unless specified).
-
-            Provide a detailed response with:
-            - Calculated valuation for each method (if applicable).
-            - Explanation of why each method is suitable or not for this company based on the industry and data.
-            - A recommended valuation range combining the results.
-
-            Format your response with clear headings and bullet points. Make sure to include a final summary section with a recommended valuation range at the end.
-            """
-            valuation_result = gemini_qna(valuation_prompt)
-
+        # --- AI Analysis Card ---
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("## Valuation Results")
-        st.markdown(valuation_result)
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("### AI-Powered Valuation Analysis")
+        st.caption("Based on your inputs and dataset benchmarks (where available).")
 
-        if st.button("Start New Valuation", use_container_width=True):
+        # Construct prompt for Gemini
+        user_revenue = safe_float(data.get('revenue', 0))
+        user_earnings = safe_float(data.get('earnings', 0))
+        user_assets = safe_float(data.get('assets', 0))
+        user_liabilities = safe_float(data.get('liabilities', 0))
+
+        prompt_context = f"""
+Analyze the potential valuation for the company: "{user_company_name}".
+
+User Company Data:
+- Industry: {data.get('industry', 'N/A')}
+- Annual Revenue: {user_revenue:,.2f} USD
+- Annual Earnings/Profit: {user_earnings:,.2f} USD
+- Total Assets: {user_assets:,.2f} USD
+- Total Liabilities: {user_liabilities:,.2f} USD
+- Estimated Growth Rate Category: {data.get('growth', 'N/A')}
+
+Comparable Deals Dataset Benchmarks (Derived from investor pitch show data for '{data.get('industry', 'N/A')}'):
+"""
+        if benchmarks and benchmarks.get("count", 0) > 2:
+             def format_benchmark(key, format_str="{:,.2f}x", usd_format="${:,.0f}", pct_format="{:.1f}%"):
+                 val = benchmarks.get(key)
+                 if val is None or val == 0: return "N/A"
+                 if "valuation" in key and "multiple" not in key: return usd_format.format(val)
+                 if "equity" in key: return pct_format.format(val)
+                 if isinstance(val, (int, float)): return format_str.format(val)
+                 return "N/A"
+
+             prompt_context += f"""
+- Number of Comparable Deals Found: {benchmarks['count']}
+- Median Deal Valuation: {format_benchmark('median_deal_valuation')}
+- Average Deal Valuation: {format_benchmark('avg_deal_valuation')}
+- Median Valuation/Revenue Multiple: {format_benchmark('median_valuation_revenue_multiple')}
+- Average Valuation/Revenue Multiple: {format_benchmark('avg_valuation_revenue_multiple')}
+- Median Valuation/Profit Multiple: {format_benchmark('median_valuation_profit_multiple')}
+- Average Valuation/Profit Multiple: {format_benchmark('avg_valuation_profit_multiple')}
+- Median Equity Percentage Given: {format_benchmark('median_equity_percentage')}
+- Average Equity Percentage Given: {format_benchmark('avg_equity_percentage')}
+"""
+        else:
+            prompt_context += "- No specific or sufficient comparable deals benchmarks available from the dataset for this industry. Rely more on standard methods and general industry knowledge, stating this limitation.\n"
+
+        prompt_context += """
+Please provide a detailed valuation analysis following the instructions in your system prompt. Focus on using the MEDIAN dataset benchmarks for calculations when available and sensible. Provide a final recommended valuation range and justification.
+        """
+
+        # Get valuation result from Gemini
+        with st.spinner("🧠 Analyzing valuation with AI..."):
+            st.progress(4 / 4)
+            valuation_result = gemini_qna(prompt_context, is_valuation=True)
+
+        # Display result
+        st.markdown(valuation_result)
+        st.markdown("</div>", unsafe_allow_html=True) # Close AI Analysis Card
+
+
+        # --- Comparables Card ---
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("### Comparable Deal Details")
+        st.caption("Examples from the dataset for context (max 5 shown).")
+
+        if 'comparables' in st.session_state and st.session_state.comparables:
+            # Filter comparables slightly - maybe exclude those with zero deal val?
+            valid_comparables = [c for c in st.session_state.comparables if get_deal_valuation(c) > 0]
+
+            if not valid_comparables:
+                 st.info(f"No comparable deals with complete data found for '{data.get('industry', 'N/A')}' to display details.")
+            else:
+                comparables_to_show = valid_comparables[:5] # Show top 5 valid ones
+                st.markdown(f"_Displaying details from up to {len(comparables_to_show)} comparable deals in '{data.get('industry', 'N/A')}'._")
+
+                for i, comp_deal in enumerate(comparables_to_show):
+                    comp_name = comp_deal.get("business_basics", {}).get("business_name", "Unknown Company")
+                    with st.expander(f"{comp_name}"):
+                        try:
+                            ask_amt = safe_float(comp_deal.get("pitch_metrics", {}).get("initial_ask_amount"))
+                            ask_eq = safe_float(comp_deal.get("pitch_metrics", {}).get("equity_offered"))
+                            ask_val = safe_float(comp_deal.get("pitch_metrics", {}).get("implied_valuation")) # Requested Val
+
+                            final_terms_dict = get_displayable_final_terms(comp_deal)
+                            final_amt = final_terms_dict['amount']
+                            final_eq = final_terms_dict['equity']
+                            final_loan = final_terms_dict['loan']
+                            final_val = get_deal_valuation(comp_deal) # Actual Deal Val
+
+                            usp = comp_deal.get("product_service_information", {}).get("unique_selling_proposition", "Not specified.")
+
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.markdown("**Pitch Ask:**")
+                                st.write(f"- Request: `{fmt_usd(ask_amt)}` for `{fmt_pct(ask_eq)}`")
+                                st.write(f"- Implied Val: `{fmt_usd(ask_val)}`")
+                            with c2:
+                                st.markdown("**Deal Terms (On Air):**")
+                                deal_str = f"- Invest: `{fmt_usd(final_amt)}` for `{fmt_pct(final_eq)}`"
+                                if final_loan > 0:
+                                    deal_str += f" (+ `{fmt_usd(final_loan)}` Loan)"
+                                st.write(deal_str)
+                                st.write(f"- Deal Val: `{fmt_usd(final_val)}`")
+
+                            st.markdown("**Unique Selling Prop:**")
+                            st.markdown(f"> _{usp}_")
+
+                        except Exception as e:
+                            st.warning(f"Could not display full details for {comp_name}: {e}")
+        else:
+            st.info(f"No comparable deal data loaded.")
+
+        st.markdown("</div>", unsafe_allow_html=True) # Close Comparables Card
+
+        # --- Reset Button ---
+        if st.button("Start New Valuation", key="reset_val", use_container_width=True):
+            # Reset state variables for valuation page
             st.session_state.valuation_step = 0
             st.session_state.valuation_data = {}
+            st.session_state.benchmarks = None
+            st.session_state.comparables = None
+            # Clear potentially large cached items if needed, though Streamlit handles some caching
+            # get_comparable_deals.clear()
+            # calculate_sharktank_benchmarks.clear()
             st.rerun()
 
 # 3. Interactive Business Assessment
