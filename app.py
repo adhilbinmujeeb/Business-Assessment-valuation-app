@@ -458,34 +458,47 @@ Adapt your response style based on whether you are asking a question, providing 
 
 
 @st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600)
 def get_unique_industries(_listings_collection):
-    """Fetches unique industry categories from the listings collection."""
+    """Fetches unique industry categories from the listings collection.
+       Removed $toTitle for broader MongoDB compatibility."""
+    fallback_industries = ["Select an Industry...", "Software/SaaS", "E-commerce", "Manufacturing", "Retail", "Healthcare", "Food & Beverage", "Education", "Consumer Product", "Apparel", "Service", "Technology", "Other"]
     try:
         pipeline = [
             # Ensure industry_category exists and is an array
-            {"$match": {"business_basics.industry_category": {"$exists": True, "$ne": None, "$type": "array"}}},
+            {"$match": {"business_basics.industry_category": {"$exists": True, "$ne": None, "$type": "array", "$ne": [] }}}, # Also check not empty array
             {"$unwind": "$business_basics.industry_category"}, # Unwind the array
-            # Normalize: Trim whitespace and convert to title case for consistency
-            {"$addFields": {"normalized_industry": {"$toTitle": {"$trim": {"input": "$business_basics.industry_category"}}}}},
-            # Group by the normalized industry name
+            # Normalize: Trim whitespace - Keep this step
+            {"$addFields": {"normalized_industry": {"$trim": {"input": "$business_basics.industry_category"}}}},
+            # Remove empty strings after trimming
+            {"$match": {"normalized_industry": {"$ne": ""}}},
+            # Group by the trimmed industry name (case-sensitive now)
             {"$group": {"_id": "$normalized_industry"}},
             {"$sort": {"_id": 1}}, # Sort alphabetically
             # Limit the number of distinct industries if it becomes too large
             {"$limit": 500}
         ]
-        industries = [doc["_id"] for doc in _listings_collection.aggregate(pipeline) if doc["_id"]] # Filter out None/empty
+        # Execute aggregation
+        results = list(_listings_collection.aggregate(pipeline))
+        # Extract industry names
+        industries = [doc["_id"] for doc in results if doc["_id"]] # Filter out None/empty again just in case
+
         if industries:
+             # Optional: You could do title casing in Python now if desired, though it might group similar entries separately
+             # industries = sorted(list(set(ind.title() for ind in industries))) # Example python title casing + dedupe
              return ["Select an Industry..."] + industries
         else:
-             # Fallback if aggregation fails or returns nothing
+             # Fallback if aggregation returns nothing
              st.warning("Could not fetch dynamic industry list, using fallback.")
-             return ["Select an Industry...", "Software/SaaS", "E-commerce", "Manufacturing", "Retail", "Healthcare", "Food & Beverage", "Education", "Consumer Product", "Apparel", "Service", "Technology", "Other"]
+             return fallback_industries
+    except pymongo.errors.OperationFailure as e:
+         # More specific error handling for pipeline issues
+        st.error(f"MongoDB Aggregation Error fetching industries: {e.details.get('errmsg', e)}")
+        return fallback_industries
     except Exception as e:
-        st.error(f"Could not fetch industries from MongoDB: {e}")
+        st.error(f"General Error fetching industries from MongoDB: {e}")
         # Return fallback list on error
-        return ["Select an Industry...", "Software/SaaS", "E-commerce", "Manufacturing", "Retail", "Healthcare", "Food & Beverage", "Education", "Consumer Product", "Apparel", "Service", "Technology", "Other"]
-
-
+        return fallback_industries
 # ===============================
 # --- Sidebar Navigation ---
 # ===============================
